@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 import pandas as pd
-import re
 import matplotlib.dates as mdates
 from astropy.time import Time
 import matplotlib.gridspec as gridspec
@@ -36,6 +35,10 @@ import onnxruntime as ort
 import huxt as H
 import huxt_inputs as Hin
 import huxt_analysis as HA
+
+#Mattlab libraries
+import helio_coords as hcoords
+import insitu
 
 
 
@@ -129,228 +132,6 @@ icmes_solo = pd.DataFrame({
 icmes_solo = icmes_solo.apply(pd.to_datetime)
 
 
-def earth_R(mjd):
-    #returns the heliocentric distance of Earth (in km). Based on Franz+Harper2002
-    AU = 149597870.691
-    
-    #first up, switch to JD.
-    JD=mjd+2400000.5
-    d0=JD-2451545
-    T0=d0/36525
-
-
-    L2=100.4664568 + 35999.3728565*T0
-    g2=L2-(102.9373481+0.3225654*T0)
-    g2=g2*np.pi/180 #mean anomaly
-
-    rAU=1.00014 - 0.01671*np.cos(g2)-0.00014*np.cos(2*g2);
-    R=rAU*AU
-    
-    return R
-
-def ICMElist(filepath):
-    # -*- coding: utf-8 -*-
-    """
-    A script to read and process Ian Richardson's ICME list.
-
-    Some pre-processing is required:
-        Download the following webpage as a html file: 
-            http://www.srl.caltech.edu/ACE/ASC/DATA/level3/icmetable2.htm
-        Open in Excel, remove the year rows, delete last column (S) which is empty
-        Cut out the data table only (delete header and footer)
-        Save as a CSV.
-
-    """
-
-    
-    
-    icmes=pd.read_csv(filepath,header=None)
-    #delete the first row
-    icmes.drop(icmes.index[0], inplace=True)
-    icmes.index = range(len(icmes))
-    
-    for rownum in range(0,len(icmes)):
-        for colnum in range(0,3):
-            #convert the three date stamps
-            datestr=icmes[colnum][rownum]
-            year=int(datestr[:4])
-            month=int(datestr[5:7])
-            day=int(datestr[8:10])
-            hour=int(datestr[11:13])
-            minute=int(datestr[13:15])
-            #icmes.set_value(rownum,colnum,datetime(year,month, day,hour,minute,0))
-            icmes.at[rownum,colnum] = datetime.datetime(year,month, day,hour,minute,0)
-            
-            #print(datestr)
-            
-        #tidy up the plasma properties
-        for paramno in range(10,17):
-            dv=str(icmes[paramno][rownum])
-            
-            #print(str(paramno)+ ' ' + dv)
-            
-            if dv == '...' or dv == 'dg' or dv == 'nan' or dv == '... P' or dv == '... Q':
-                #icmes.set_value(rownum,paramno,np.nan)
-                icmes.at[rownum,paramno] = np.nan
-            else:
-                #remove any remaining non-numeric characters
-                dv=re.sub('[^0-9]','', dv)
-                #icmes.set_value(rownum,paramno,float(dv))
-                icmes.at[rownum,paramno] = float(dv)
-        
-    
-    #chage teh column headings
-    icmes=icmes.rename(columns = {0:'Shock_time',
-                                  1:'ICME_start',
-                                  2:'ICME_end',
-                                  10:'dV',
-                                  11: 'V_mean',
-                                  12:'V_max',
-                                  13:'Bmag',
-                                  14:'MCflag',
-                                  15:'Dst',
-                                  16:'V_transit'})
-    return icmes
-
-
-#returns the ECLIPTIC longitude (in degrees) of Earth for a given MJD
-def earthecliplong(inputMJD):
-    
-    #convert to numpy array, to get length, be able to index, etc.
-    if np.isscalar(inputMJD):
-        MJD=np.array([inputMJD])
-    else:
-        MJD=np.array(inputMJD)
-    L=0.0*MJD    
-        
-    for i in range(0,MJD.size):   
-        
-        julianday=MJD[i] + 2400000.5
-        
-        dd=julianday-2451909.5
-        ep=0.01670790-0.00000000120*dd
-        MM=356.779027+0.98560028*dd
-        M=MM*np.pi/180
-        
-        EEi=0.0
-        EEione=0.0
-        N=0.0
-        delEE=1.0
-        
-        while ( delEE>1E-10 ):
-            EEi=EEione;   
-            EEione=EEi-(M-EEi+ep*np.sin(EEi))/(ep*np.cos(EEi)-1)
-            N=N+1
-            delEE=np.abs(EEione-EEi)
-        
-        tanv=np.sqrt((1+ep)/(1-ep))*np.tan(EEione/2)
-        v=2*np.arctan(tanv);
-        vdeg=v*180/np.pi
-        
-        if vdeg<0:
-            vdeg=vdeg+360
-        elif vdeg>360:
-            interg=np.floor(vdeg/360)
-            vdeg=vdeg-360*interg
-        
-        L[i]=vdeg+282.955505 +0.00004708*dd
-        
-        if L[i]>360:
-            interL=np.floor(L[i]/360)
-            L[i]=L[i]-360*interL
-
-    return L
-
-
-#a functiont o convert from ecliptic to heliogrpahic coordiates. Input and answer in degrees(?)
-def eclip2heliograph(inputMJD,ecliplong,ecliplat):
-    #convert to numpy array, to get length, be able to index, etc.
-    if np.isscalar(inputMJD):
-        MJD=np.array([inputMJD])
-    else:
-        MJD=np.array(inputMJD)
-    #create the array to store the answer
-    y=np.empty([MJD.size, 2])
-      
-    for i in range(0,MJD.size):   
-        #convert to julian day
-        julianday=MJD[i] + 2400000.5
-        #ecliptic inclination to heliographic equator
-        incl=7.25
-        
-        #the Earth's ecliptic latitude is zero
-        ecliplat=0.0
-        ecliplong=earthecliplong(MJD[i])
-        
-        omega=73 +40/60 +50.25*((julianday-2396760)/365)/3600
-        
-        ww=(360/25.38)*(julianday-2398220)
-        ww=(ww/360 - np.floor(ww/360))*360
-        
-        sinB=np.sin(ecliplat*np.pi/180)*np.cos(incl*np.pi/180) - \
-            np.cos(ecliplat*np.pi/180)*np.sin(incl*np.pi/180)*np.sin((ecliplong-omega)*np.pi/180)
-            
-        B=np.arcsin(sinB)*180/np.pi
-        
-        sinWL=np.sin(ecliplat*np.pi/180)*np.sin(incl*np.pi/180) + \
-            np.cos(incl*np.pi/180)*np.cos(ecliplat*np.pi/180)*np.sin((ecliplong-omega)*np.pi/180)/np.cos(B*np.pi/180)
-        cosWL=np.cos((ecliplong-omega)*np.pi/180)*np.cos(ecliplat*np.pi/180)/np.cos(B*np.pi/180)
-        WL=np.arctan2(sinWL,cosWL)*180/np.pi
-        
-        if WL<0:
-            WL=WL+360
-        L=WL-ww
-        
-        if L<0:
-            L=L+360
-        
-        y[i][0]=B
-        y[i][1]=L
-        
-    return y  
-def carringtonlatlong_earth(inputMJD):
-     #convert to numpy array, to get length, be able to index, etc.
-    if np.isscalar(inputMJD):
-        MJD=np.array([inputMJD])
-    else:
-        MJD=np.array(inputMJD)
-    #create the array to store the answer
-    y=np.empty([MJD.size, 2])
-    
-      
-    for i in range(0,MJD.size):  
-        incl=7.25*np.pi/180
-               
-        #use the kepler's law function to calculate the longitude
-        temp= (eclip2heliograph(MJD[i],earthecliplong(MJD[i]),0)-180)*np.pi/180
-        carrlong=H._zerototwopi_(temp[:,1])
-        
-        #the longitude of the ascending node (from Dusan's coord.pdf document)
-        omega=73.666666667 +(0.01395833)*(MJD[i]+3243.72)/365.25
-        omega=omega*np.pi/180
-        
-        #ecliptic longitude....
-        n=MJD[i]-51544.5
-        g=357.528+0.9856003*n
-        g=g*np.pi/180
-        L=280.460+0.9856474*n
-        phi=L+1.915*np.sin(g)+0.020*np.sin(2*g)
-        phi=phi*np.pi/180
-        
-        #ecliptic longitude of the Sun's central meridian
-        theta=np.arctan(np.cos(incl)*np.tan(phi-omega))
-        
-        if (H._zerototwopi_(phi-omega) < np.pi) and (H._zerototwopi_(theta)<np.pi):
-            theta=theta+np.pi
-        elif (H._zerototwopi_(phi-omega) > np.pi) and (H._zerototwopi_(theta)>np.pi):
-            theta=theta+np.pi
-        
-        B0=np.arcsin(np.sin(theta)*np.sin(incl))
-        
-        carrlat=(np.pi/2)+B0
-        y[i][0]=carrlat
-        y[i][1]=carrlong
-    return y
 # <codecell> Download and process OMNI
 
 #compute the run start and end times so that the ICME is in the centre of the window
@@ -392,7 +173,7 @@ omni_noicmes = omni.copy()
 if icme_list == 'DONKI':
     icmes = Hin.get_DONKI_ICMEs(dl_starttime, dl_endtime)
 elif icme_list == 'CaneRichardson':
-    icmes = ICMElist(icmelist_path)
+    icmes = insitu.ICMElist(icmelist_path)
 
 
 #remove all ICMEs
@@ -494,7 +275,7 @@ ax.set_xticklabels([])
 #plot of long and time
 #=====================
 #compute the Carrington longitude of Earth
-temp = carringtonlatlong_earth(omni_noicmes['mjd'])
+temp = hcoords.carringtonlatlong_earth(omni_noicmes['mjd'])
 omni_noicmes['Carr_lon'] = temp[:,1]
 
 ax = axs[1]
@@ -618,7 +399,7 @@ vcarr_rmin_both_icmes = v1au_both_icmes.copy()
 
 for i in range(0, len(time1au_both)):
     #get the Earth heliocentric distance at this time
-    Earth_R_km = earth_R(time1au_both[i]) *u.km
+    Earth_R_km = hcoords.earth_R(time1au_both[i]) *u.km
     #Map from 215 rto 21.5 rS
     
     vcarr_rmin_both[:,i] = Hin.map_v_boundary_inwards(v1au_both[:,i]*u.km/u.s, 

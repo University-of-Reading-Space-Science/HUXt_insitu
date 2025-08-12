@@ -17,31 +17,19 @@ Created on Mon Mar 31 10:40:52 2025
 import datetime
 import os
 import astropy.units as u
-from astropy.time import Time
 import glob
 import re
 import numpy as np
 import time
-import sunpy
-from sunpy.net import Fido
-from sunpy.net import attrs
-from sunpy.timeseries import TimeSeries
-from sunpy.coordinates import HeliocentricEarthEcliptic, get_horizons_coord
 import requests
 import matplotlib.pyplot as plt
 import pandas as pd
-import h5py
 
 #HUXt libraries
 import huxt as H
 import huxt_inputs as Hin
 import huxt_analysis as HA
 
-#Mattlab libraries
-import insitu 
-import helio_time as htime
-import helio_coords as hcoords
-import mplot
 
 
 
@@ -49,14 +37,14 @@ import mplot
 
 
 
-run_start = datetime.datetime(2024,10,1)
-run_stop =  datetime.datetime(2025,1,1)
+run_start = datetime.datetime(2020,10,1)
+run_stop =  datetime.datetime(2021,1,1)
 
 
 #HUXt run parameters
 dt_scale = 4
 rmin = 21.5*u.solRad
-rmax = 2150*u.solRad #outer boundary for HUXt runs
+rmax = 240*u.solRad #outer boundary for HUXt runs
 
 recon_noicmes = True
 icme_list = 'CaneRichardson'#'DONKI'
@@ -66,7 +54,14 @@ sw_buffer = 0.1*u.day
 vsw_fill = 450 *u.km/u.s
 bx_fill = 0
 
-cme_source = 'ukmo'#'donki' #
+cme_source = 'donki' #'ukmo'#
+
+
+#directory structure
+cwd = os.path.dirname(os.path.realpath(__file__))
+figdir =  os.path.join(os.path.dirname(cwd), 'figures' )
+data_dir = os.path.join(os.path.dirname(cwd), 'data')
+icmelist_path = os.path.join(data_dir, 'Richardson_Cane_Porcessed_ICME_list.csv')
 
 
 # <codecell> functions
@@ -140,6 +135,89 @@ def batch_download_cone_files(startdate, stopdate, download_dir):
                 conefile_list.append(conefilepath)
 
 
+
+def earth_R(mjd):
+    #returns the heliocentric distance of Earth (in km). Based on Franz+Harper2002
+    AU = 149597870.691
+    
+    #first up, switch to JD.
+    JD=mjd+2400000.5
+    d0=JD-2451545
+    T0=d0/36525
+
+
+    L2=100.4664568 + 35999.3728565*T0
+    g2=L2-(102.9373481+0.3225654*T0)
+    g2=g2*np.pi/180 #mean anomaly
+
+    rAU=1.00014 - 0.01671*np.cos(g2)-0.00014*np.cos(2*g2);
+    R=rAU*AU
+    
+    return R
+
+def ICMElist(filepath):
+    # -*- coding: utf-8 -*-
+    """
+    A script to read and process Ian Richardson's ICME list.
+
+    Some pre-processing is required:
+        Download the following webpage as a html file: 
+            http://www.srl.caltech.edu/ACE/ASC/DATA/level3/icmetable2.htm
+        Open in Excel, remove the year rows, delete last column (S) which is empty
+        Cut out the data table only (delete header and footer)
+        Save as a CSV.
+
+    """
+
+    
+    
+    icmes=pd.read_csv(filepath,header=None)
+    #delete the first row
+    icmes.drop(icmes.index[0], inplace=True)
+    icmes.index = range(len(icmes))
+    
+    for rownum in range(0,len(icmes)):
+        for colnum in range(0,3):
+            #convert the three date stamps
+            datestr=icmes[colnum][rownum]
+            year=int(datestr[:4])
+            month=int(datestr[5:7])
+            day=int(datestr[8:10])
+            hour=int(datestr[11:13])
+            minute=int(datestr[13:15])
+            #icmes.set_value(rownum,colnum,datetime(year,month, day,hour,minute,0))
+            icmes.at[rownum,colnum] = datetime.datetime(year,month, day,hour,minute,0)
+            
+            #print(datestr)
+            
+        #tidy up the plasma properties
+        for paramno in range(10,17):
+            dv=str(icmes[paramno][rownum])
+            
+            #print(str(paramno)+ ' ' + dv)
+            
+            if dv == '...' or dv == 'dg' or dv == 'nan' or dv == '... P' or dv == '... Q':
+                #icmes.set_value(rownum,paramno,np.nan)
+                icmes.at[rownum,paramno] = np.nan
+            else:
+                #remove any remaining non-numeric characters
+                dv=re.sub('[^0-9]','', dv)
+                #icmes.set_value(rownum,paramno,float(dv))
+                icmes.at[rownum,paramno] = float(dv)
+        
+    
+    #chage teh column headings
+    icmes=icmes.rename(columns = {0:'Shock_time',
+                                  1:'ICME_start',
+                                  2:'ICME_end',
+                                  10:'dV',
+                                  11: 'V_mean',
+                                  12:'V_max',
+                                  13:'Bmag',
+                                  14:'MCflag',
+                                  15:'Dst',
+                                  16:'V_transit'})
+    return icmes
 
 
 def find_cone_files_from_archive(start_date, end_date, directory, midnightonly = False):
@@ -223,7 +301,7 @@ if recon_noicmes:
     if icme_list == 'DONKI':
         icmes = Hin.get_DONKI_ICMEs(dl_starttime, dl_endtime)
     elif icme_list == 'CaneRichardson':
-        icmes = insitu.ICMElist()
+        icmes = ICMElist(icmelist_path)
     
     
     #remove all ICMEs
@@ -281,7 +359,7 @@ vcarr_rmin_dtw = v1au_both.copy()
 
 for i in range(0, len(time1au_both)):
     #get the Earth heliocentric distance at this time
-    Earth_R_km = hcoords.earth_R(time1au_both[i]) *u.km
+    Earth_R_km = earth_R(time1au_both[i]) *u.km
     #Map from 215 rto 21.5 rS
     
     vcarr_rmin_both[:,i] = Hin.map_v_boundary_inwards(v1au_both[:,i]*u.km/u.s, 
@@ -324,18 +402,18 @@ model_both_nocmes.solve([])
 
 # <codecell> Extract conditions at Saturn
 
-#get conditions at Mercury
+# #get conditions at Mercury
 
-Saturn_ts_both_nocmes = HA.get_observer_timeseries(model_both_nocmes, observer='Saturn', suppress_warning = True)
-#Saturn_ts_dtw_nocmes = HA.get_observer_timeseries(model_dtw_nocmes, observer='Saturn', suppress_warning = True)
+# Saturn_ts_both_nocmes = HA.get_observer_timeseries(model_both_nocmes, observer='Saturn', suppress_warning = True)
+# #Saturn_ts_dtw_nocmes = HA.get_observer_timeseries(model_dtw_nocmes, observer='Saturn', suppress_warning = True)
 
 
-plt.figure()
-plt.plot(Saturn_ts_both_nocmes['time'], Saturn_ts_both_nocmes['vsw'], 'k', label = 'OMNI-HUXt')
-#plt.plot(Saturn_ts_dtw_nocmes['time'], Saturn_ts_dtw_nocmes['vsw'], 'b', label = 'OMNI-HUXt')
-plt.ylabel(r'$V_{SW}$ [km/s]')
-plt.xlim((run_start,run_stop)  ) 
-plt.legend() 
+# plt.figure()
+# plt.plot(Saturn_ts_both_nocmes['time'], Saturn_ts_both_nocmes['vsw'], 'k', label = 'OMNI-HUXt')
+# #plt.plot(Saturn_ts_dtw_nocmes['time'], Saturn_ts_dtw_nocmes['vsw'], 'b', label = 'OMNI-HUXt')
+# plt.ylabel(r'$V_{SW}$ [km/s]')
+# plt.xlim((run_start,run_stop)  ) 
+# plt.legend() 
 
 
 
@@ -388,16 +466,16 @@ Saturn_ts_both_cmes = HA.get_observer_timeseries(model_both_cmes, observer='Satu
 
 # <codecell> Plot with CMEs too
 
-plt.figure()
-#plt.plot(mars_ts_back['time'],mars_ts_back['vsw'], label = 'OMNI/HUXt (back)')
-#plt.plot(mars_ts_forward['time'],mars_ts_forward['vsw'], label = 'OMNI/HUXt (forward)')
-plt.plot(Saturn_ts_both_nocmes['time'], Saturn_ts_both_nocmes['vsw'], 'k', label = 'OMNI/HUXt (Ambient)')
-plt.plot(Saturn_ts_both_cmes['time'], Saturn_ts_both_cmes['vsw'], 'r', label = 'OMNI/HUXt (CMEs)')
-#plt.plot(maven['time'],maven['vsw'], 'bo', label = 'MAVEN')
-plt.ylabel(r'$V_{SW}$ [km/s]')
-plt.xlim((run_start,run_stop)  ) 
-plt.ylim((300, 700))
-plt.legend() 
+# plt.figure()
+# #plt.plot(mars_ts_back['time'],mars_ts_back['vsw'], label = 'OMNI/HUXt (back)')
+# #plt.plot(mars_ts_forward['time'],mars_ts_forward['vsw'], label = 'OMNI/HUXt (forward)')
+# plt.plot(Saturn_ts_both_nocmes['time'], Saturn_ts_both_nocmes['vsw'], 'k', label = 'OMNI/HUXt (Ambient)')
+# plt.plot(Saturn_ts_both_cmes['time'], Saturn_ts_both_cmes['vsw'], 'r', label = 'OMNI/HUXt (CMEs)')
+# #plt.plot(maven['time'],maven['vsw'], 'bo', label = 'MAVEN')
+# plt.ylabel(r'$V_{SW}$ [km/s]')
+# plt.xlim((run_start,run_stop)  ) 
+# plt.ylim((300, 700))
+# plt.legend() 
 
 # <codecell> animate it.
 
