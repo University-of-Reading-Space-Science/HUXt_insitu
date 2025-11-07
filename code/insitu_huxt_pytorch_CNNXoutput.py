@@ -4,8 +4,7 @@ A script ot train the CNN for solar wind backmapping
 
 @author: mathe
 """
-
-import os
+# <codecell> imports
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
@@ -16,13 +15,16 @@ import huxt_analysis as HA
 import astropy.units as u
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-import onnxruntime as ort
-
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+import onnxruntime as ort
+
+#import torch
+#import torch.nn as nn
+#from torch.utils.data import DataLoader, TensorDataset
+
+
+
 
 
 rmin = 21.5*u.solRad
@@ -206,6 +208,26 @@ joblib.dump(y_scaler, os.path.join(data_dir, 'y_scaler_torch.save'))
 
 
 # <codecell>  load the model back in and apply it to the test inputs
+
+
+# Load data
+X = np.loadtxt(os.path.join(data_dir, 'X.txt'), delimiter=",")
+Y = np.loadtxt(os.path.join(data_dir, 'Y.txt'), delimiter=",")
+n_lons = X.shape[1]
+
+# Preprocess & Reshape for Conv1D
+x_scaler = StandardScaler()
+y_scaler = StandardScaler()
+X_scaled = x_scaler.fit_transform(X)
+Y_scaled = y_scaler.fit_transform(Y)
+
+# Reshape for Conv1D: (samples, length, channels)
+X_scaled = X_scaled[..., np.newaxis]
+Y_scaled = Y_scaled[..., np.newaxis]
+
+# Train/Test Split
+X_train, X_test, Y_train, Y_test = train_test_split(X_scaled, Y_scaled, test_size=0.2, random_state=42)
+
  
 # Load scalers
 x_scaler = joblib.load(os.path.join(data_dir, 'x_scaler_torch.save'))
@@ -300,7 +322,7 @@ y_scaler = joblib.load(os.path.join(data_dir, 'y_scaler_torch.save'))
 
 # Load test data (X_test) from earlier session or rerun the preprocessing
 # Assuming X_test is still available in memory
-X_test_tensor = torch.tensor(X_test, dtype=torch.float32).permute(0, 2, 1).to("cpu")  # (batch, channels, length)
+# X_test_tensor = torch.tensor(X_test, dtype=torch.float32).permute(0, 2, 1).to("cpu")  # (batch, channels, length)
 
 
 
@@ -361,17 +383,19 @@ nr = np.argmin(model_true.v_grid[0,:,0].value - 0.3*215 )
 
 fig = plt.figure( figsize=(12, 10))
 gs = gridspec.GridSpec(4, 3, hspace=0.1, wspace=0.1)
-
 ax1 = fig.add_subplot(gs[0, 0], projection='polar')         
 ax2 = fig.add_subplot(gs[0, 1], projection='polar')         
 ax3 = fig.add_subplot(gs[0, 2], projection='polar')  
-
 ax4 = fig.add_subplot(gs[1, :])  
 ax5 = fig.add_subplot(gs[2, :])  
 ax6 = fig.add_subplot(gs[3, :])  
-       
 
-mae_bm = np.nanmean(abs( Y_true[i] - Y_backmap[i]))
+# Add (a), (b), (c) labels to the top three polar plots
+ax1.text(-0.15, 0.95, '(a)', transform=ax1.transAxes, fontsize=14, verticalalignment='top', horizontalalignment='left')
+ax2.text(-0.15, 0.95, '(b)', transform=ax2.transAxes, fontsize=14, verticalalignment='top', horizontalalignment='left')
+ax3.text(-0.15, 0.95, '(c)', transform=ax3.transAxes, fontsize=14, verticalalignment='top', horizontalalignment='left')
+
+mae_bmi = np.nanmean(abs( Y_true[i] - Y_backmap[i]))
 mae_cnn = np.nanmean(abs( Y_true[i] - Y_pred[i]))
 ax4.plot(carr_lons, Y_true[i], 'k', label="True")
 ax4.plot(carr_lons, Y_backmap[i], 'b', label="Backmap")
@@ -382,9 +406,9 @@ ax4.set_ylabel(r'$V_{SW}$ [km/s]')
 ax4.set_ylim((250, 750))
 ax4.set_xticks((0, 90, 180, 270, 360 ))
 ax4.set_xlim((0, 360))
-ax4.text(0.02, 0.95, '(a) 0.1 AU', transform=ax4.transAxes,
+ax4.text(0.02, 0.95, '(d) 0.1 AU', transform=ax4.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left')
-ax4.text(0.18, 0.95, 'MAE = ' + format(mae_bm, ".1f") + r' km s$^{-1}$', transform=ax4.transAxes,
+ax4.text(0.18, 0.95, 'MAE = ' + format(mae_bmi, ".1f") + r' km s$^{-1}$', transform=ax4.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left', color = 'b')
 ax4.text(0.43, 0.95, 'MAE = ' + format(mae_cnn, ".1f") + r' km s$^{-1}$', transform=ax4.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left', color = 'r')
@@ -392,7 +416,7 @@ ax4.set_xticklabels([])
 
 
 
-mae_bm = np.nanmean(abs(model_true.v_grid[0,nr,:] - model_backmap.v_grid[0,nr,:])).value
+mae_bmi = np.nanmean(abs(model_true.v_grid[0,nr,:] - model_backmap.v_grid[0,nr,:])).value
 mae_cnn = np.nanmean(abs(model_true.v_grid[0,nr,:] - model_cnn.v_grid[0,nr,:])).value
 ax5.plot(carr_lons, model_true.v_grid[0,nr,:], 'k', label="True")
 ax5.plot(carr_lons, model_backmap.v_grid[0,nr,:], 'b', label="Backmap")
@@ -403,16 +427,16 @@ ax5.set_ylabel(r'$V_{SW}$ [km/s]')
 ax5.set_ylim((250, 750))
 ax5.set_xticks((0, 90, 180, 270, 360 ))
 ax5.set_xlim((0, 360))
-ax5.text(0.02, 0.95, '(b) 0.3 AU', transform=ax5.transAxes,
+ax5.text(0.02, 0.95, '(e) 0.3 AU', transform=ax5.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left')
-ax5.text(0.18, 0.95, 'MAE = ' + format(mae_bm, ".1f") + r' km s$^{-1}$', transform=ax5.transAxes,
+ax5.text(0.18, 0.95, 'MAE = ' + format(mae_bmi, ".1f") + r' km s$^{-1}$', transform=ax5.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left', color = 'b')
 ax5.text(0.43, 0.95, 'MAE = ' + format(mae_cnn, ".1f") + r' km s$^{-1}$', transform=ax5.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left', color = 'r')
 ax5.set_xticklabels([])
 
 
-mae_bm = np.nanmean(abs(model_true.v_grid[0,-1,:] - model_backmap.v_grid[0,-1,:])).value
+mae_bmi = np.nanmean(abs(model_true.v_grid[0,-1,:] - model_backmap.v_grid[0,-1,:])).value
 mae_cnn = np.nanmean(abs(model_true.v_grid[0,-1,:] - model_cnn.v_grid[0,-1,:])).value
 ax6.plot(carr_lons, model_true.v_grid[0,-1,:], 'k', label="True")
 ax6.plot(carr_lons, model_backmap.v_grid[0,-1,:], 'b', label="Backmap")
@@ -424,9 +448,9 @@ ax6.set_xlabel(r'Carrington longitude [deg]')
 ax6.set_ylim((250, 750))
 ax6.set_xticks((0, 90, 180, 270, 360 ))
 ax6.set_xlim((0, 360))
-ax6.text(0.02, 0.95, '(c) 1 AU', transform=ax6.transAxes,
+ax6.text(0.02, 0.95, '(f) 1 AU', transform=ax6.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left')
-ax6.text(0.18, 0.95, 'MAE = ' + format(mae_bm, ".1f") + r' km s$^{-1}$', transform=ax6.transAxes,
+ax6.text(0.18, 0.95, 'MAE = ' + format(mae_bmi, ".1f") + r' km s$^{-1}$', transform=ax6.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left', color = 'b')
 ax6.text(0.43, 0.95, 'MAE = ' + format(mae_cnn, ".1f") + r' km s$^{-1}$', transform=ax6.transAxes,
         fontsize=14, verticalalignment='top', horizontalalignment='left', color = 'r')
