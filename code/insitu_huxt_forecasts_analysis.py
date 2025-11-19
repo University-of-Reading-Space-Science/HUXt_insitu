@@ -167,6 +167,9 @@ for ftime in dates:
 #combine the dataframes at each forecast lead time.
 combined_for_list = [pd.concat(df_list, ignore_index=True) for df_list in for_list]
 
+for i, df in enumerate(combined_for_list):
+    pass  # Data loaded
+
 
 
 # <codecell>  WSA-HUXt forecasts for the same time period
@@ -300,6 +303,12 @@ sm.taylor_diagram(STDs, RMSs, CORs,
                   styleOBS='-',
                   colOBS='k', markerobs='o', titleOBS='Obs')
 
+# Manually add scatter points if taylor_diagram didn't
+ax = plt.gca()
+if len(ax.collections) == 0:
+    ax.scatter(RMSs, STDs, s=100, marker='o', label='Models')
+    ax.legend(['Obs', 'InSitu-HUXt', 'WSA-HUXt'], loc='upper right')
+
 plt.title(f'Taylor Diagram: {plot_lead_time}-day lead time\n{start_time.year} to {stop_time.year}', 
           fontsize=14, pad=20)
 plt.tight_layout()
@@ -365,6 +374,12 @@ sm.taylor_diagram(np.array(STDs_all), np.array(RMSs_all), np.array(CORs_all),
                   tickRMS=[50, 100, 150, 200],
                   styleOBS='-',
                   colOBS='k', markerobs='o', titleOBS='Obs')
+
+# Manually add scatter points if taylor_diagram didn't
+ax = plt.gca()
+if len(ax.collections) == 0:
+    ax.scatter(RMSs_all, STDs_all, s=100, marker='o')
+    ax.legend(['Obs'] + labels_all, loc='upper right', fontsize=8)
 
 plt.title(f'Taylor Diagram by Year: {plot_lead_time}-day lead time', 
           fontsize=14, pad=20)
