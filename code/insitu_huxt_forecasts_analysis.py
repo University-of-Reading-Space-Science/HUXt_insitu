@@ -35,7 +35,7 @@ import insitu
 import helio_coords as hcoords
 
 start_time = datetime.datetime(2007,1,1)
-stop_time = datetime.datetime(2023,1,1)
+stop_time = datetime.datetime(2008,1,1)#datetime.datetime(2023,1,1)
 
 #HUXt run parameters
 dt_scale = 4
@@ -263,8 +263,6 @@ axs.set_ylabel('MAE [km/s]')
 axs.set_title(str(start_time.year) + ' to ' + str(stop_time.year), fontsize = 14)
 axs.legend()
 
-plt.show()
-
 
 # <codecell> Taylor diagrams
 
@@ -294,12 +292,8 @@ STDs = np.array([float(stats_insitu['sdev'][0]), float(stats_wsa['sdev'][0])])
 RMSs = np.array([float(stats_insitu['crmsd'][0]), float(stats_wsa['crmsd'][0])])
 CORs = np.array([float(stats_insitu['ccoef'][0]), float(stats_wsa['ccoef'][0])])
 
-# Create a custom color array using matplotlib colors
-markercolors = [(0, 0, 1), (1, 0, 0)]  # Blue and red as RGB tuples
-
 sm.taylor_diagram(STDs, RMSs, CORs,
                   markerLabel=['InSitu-HUXt', 'WSA-HUXt'], 
-                  markercolors=markercolors,
                   markerSize=10,
                   tickRMS=[50, 100, 150, 200], 
                   styleOBS='-',
@@ -350,7 +344,6 @@ STDs_all = []
 RMSs_all = []
 CORs_all = []
 labels_all = []
-markercolors_all = []
 
 for i, year in enumerate(year_labels):
     # Add InSitu-HUXt point
@@ -358,24 +351,21 @@ for i, year in enumerate(year_labels):
     RMSs_all.append(float(stats_by_year_insitu[i]['crmsd'][0]))
     CORs_all.append(float(stats_by_year_insitu[i]['ccoef'][0]))
     labels_all.append(f'{year} InSitu')
-    markercolors_all.append((0, 0, 1))  # Blue
     
     # Add WSA-HUXt point
     STDs_all.append(float(stats_by_year_wsa[i]['sdev'][0]))
     RMSs_all.append(float(stats_by_year_wsa[i]['crmsd'][0]))
     CORs_all.append(float(stats_by_year_wsa[i]['ccoef'][0]))
     labels_all.append(f'{year} WSA')
-    markercolors_all.append((1, 0, 0))  # Red
 
 sm.taylor_diagram(np.array(STDs_all), np.array(RMSs_all), np.array(CORs_all),
                   markerLabel=labels_all,
-                  markercolors=markercolors_all,
                   markerSize=8,
                   tickRMS=[50, 100, 150, 200],
                   styleOBS='-',
                   colOBS='k', markerobs='o', titleOBS='Obs')
 
-plt.title(f'Taylor Diagram by Year: {plot_lead_time}-day lead time\nBlue: InSitu-HUXt, Red: WSA-HUXt', 
+plt.title(f'Taylor Diagram by Year: {plot_lead_time}-day lead time', 
           fontsize=14, pad=20)
 plt.tight_layout()
 
