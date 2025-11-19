@@ -292,22 +292,17 @@ fig = plt.figure(figsize=(8, 8))
 
 # Combine both statistics into arrays
 # Note: [0] is reference statistics (obs), [1] is prediction statistics (model)
-STDs = np.array([float(stats_insitu['sdev'][1]), float(stats_wsa['sdev'][1])])
-RMSs = np.array([float(stats_insitu['crmsd'][1]), float(stats_wsa['crmsd'][1])])
-CORs = np.array([float(stats_insitu['ccoef'][1]), float(stats_wsa['ccoef'][1])])
+# We must include the reference stats as the first element for taylor_diagram
+STDs = np.array([float(stats_insitu['sdev'][0]), float(stats_insitu['sdev'][1]), float(stats_wsa['sdev'][1])])
+RMSs = np.array([float(stats_insitu['crmsd'][0]), float(stats_insitu['crmsd'][1]), float(stats_wsa['crmsd'][1])])
+CORs = np.array([float(stats_insitu['ccoef'][0]), float(stats_insitu['ccoef'][1]), float(stats_wsa['ccoef'][1])])
 
 sm.taylor_diagram(STDs, RMSs, CORs,
-                  markerLabel=['InSitu-HUXt', 'WSA-HUXt'], 
+                  markerLabel=['Obs', 'InSitu-HUXt', 'WSA-HUXt'], 
                   markerSize=10,
                   tickRMS=[50, 100, 150, 200], 
                   styleOBS='-',
                   colOBS='k', markerobs='o', titleOBS='Obs')
-
-# Manually add scatter points if taylor_diagram didn't
-ax = plt.gca()
-if len(ax.collections) == 0:
-    ax.scatter(RMSs, STDs, s=100, marker='o', label='Models')
-    ax.legend(['Obs', 'InSitu-HUXt', 'WSA-HUXt'], loc='upper right')
 
 plt.title(f'Taylor Diagram: {plot_lead_time}-day lead time\n{start_time.year} to {stop_time.year}', 
           fontsize=14, pad=20)
@@ -350,38 +345,36 @@ for year in years:
 fig = plt.figure(figsize=(10, 10))
 
 # Prepare arrays for all years - both InSitu and WSA
-STDs_all = []
-RMSs_all = []
-CORs_all = []
-labels_all = []
+# Normalize statistics by the observation standard deviation of each year
+# This allows plotting multiple years with different variances on the same diagram
+STDs_norm = [1.0]  # Reference STD is always 1.0 after normalization
+RMSs_norm = [0.0]  # Reference RMSE is 0.0
+CORs_norm = [1.0]  # Reference Correlation is 1.0
+labels_all = ['Obs']
 
 for i, year in enumerate(year_labels):
-    # Add InSitu-HUXt point (use [1] for prediction stats, not [0] which is reference)
-    STDs_all.append(float(stats_by_year_insitu[i]['sdev'][1]))
-    RMSs_all.append(float(stats_by_year_insitu[i]['crmsd'][1]))
-    CORs_all.append(float(stats_by_year_insitu[i]['ccoef'][1]))
+    obs_std = float(stats_by_year_insitu[i]['sdev'][0])
+    
+    # Add InSitu-HUXt point
+    STDs_norm.append(float(stats_by_year_insitu[i]['sdev'][1]) / obs_std)
+    RMSs_norm.append(float(stats_by_year_insitu[i]['crmsd'][1]) / obs_std)
+    CORs_norm.append(float(stats_by_year_insitu[i]['ccoef'][1]))
     labels_all.append(f'{year} InSitu')
     
     # Add WSA-HUXt point
-    STDs_all.append(float(stats_by_year_wsa[i]['sdev'][1]))
-    RMSs_all.append(float(stats_by_year_wsa[i]['crmsd'][1]))
-    CORs_all.append(float(stats_by_year_wsa[i]['ccoef'][1]))
+    STDs_norm.append(float(stats_by_year_wsa[i]['sdev'][1]) / obs_std)
+    RMSs_norm.append(float(stats_by_year_wsa[i]['crmsd'][1]) / obs_std)
+    CORs_norm.append(float(stats_by_year_wsa[i]['ccoef'][1]))
     labels_all.append(f'{year} WSA')
 
-sm.taylor_diagram(np.array(STDs_all), np.array(RMSs_all), np.array(CORs_all),
+sm.taylor_diagram(np.array(STDs_norm), np.array(RMSs_norm), np.array(CORs_norm),
                   markerLabel=labels_all,
                   markerSize=8,
-                  tickRMS=[50, 100, 150, 200],
+                  tickRMS=[0.5, 1.0, 1.5],
                   styleOBS='-',
                   colOBS='k', markerobs='o', titleOBS='Obs')
 
-# Manually add scatter points if taylor_diagram didn't
-ax = plt.gca()
-if len(ax.collections) == 0:
-    ax.scatter(RMSs_all, STDs_all, s=100, marker='o')
-    ax.legend(['Obs'] + labels_all, loc='upper right', fontsize=8)
-
-plt.title(f'Taylor Diagram by Year: {plot_lead_time}-day lead time', 
+plt.title(f'Normalized Taylor Diagram by Year: {plot_lead_time}-day lead time', 
           fontsize=14, pad=20)
 plt.tight_layout()
 
