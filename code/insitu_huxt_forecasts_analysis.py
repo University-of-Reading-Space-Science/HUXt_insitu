@@ -288,9 +288,10 @@ stats_wsa = sm.taylor_statistics(pred_wsa_clean, obs_clean)
 fig = plt.figure(figsize=(8, 8))
 
 # Combine both statistics into arrays
-STDs = np.array([float(stats_insitu['sdev'][0]), float(stats_wsa['sdev'][0])])
-RMSs = np.array([float(stats_insitu['crmsd'][0]), float(stats_wsa['crmsd'][0])])
-CORs = np.array([float(stats_insitu['ccoef'][0]), float(stats_wsa['ccoef'][0])])
+# Note: [0] is reference statistics (obs), [1] is prediction statistics (model)
+STDs = np.array([float(stats_insitu['sdev'][1]), float(stats_wsa['sdev'][1])])
+RMSs = np.array([float(stats_insitu['crmsd'][1]), float(stats_wsa['crmsd'][1])])
+CORs = np.array([float(stats_insitu['ccoef'][1]), float(stats_wsa['ccoef'][1])])
 
 sm.taylor_diagram(STDs, RMSs, CORs,
                   markerLabel=['InSitu-HUXt', 'WSA-HUXt'], 
@@ -346,16 +347,16 @@ CORs_all = []
 labels_all = []
 
 for i, year in enumerate(year_labels):
-    # Add InSitu-HUXt point
-    STDs_all.append(float(stats_by_year_insitu[i]['sdev'][0]))
-    RMSs_all.append(float(stats_by_year_insitu[i]['crmsd'][0]))
-    CORs_all.append(float(stats_by_year_insitu[i]['ccoef'][0]))
+    # Add InSitu-HUXt point (use [1] for prediction stats, not [0] which is reference)
+    STDs_all.append(float(stats_by_year_insitu[i]['sdev'][1]))
+    RMSs_all.append(float(stats_by_year_insitu[i]['crmsd'][1]))
+    CORs_all.append(float(stats_by_year_insitu[i]['ccoef'][1]))
     labels_all.append(f'{year} InSitu')
     
     # Add WSA-HUXt point
-    STDs_all.append(float(stats_by_year_wsa[i]['sdev'][0]))
-    RMSs_all.append(float(stats_by_year_wsa[i]['crmsd'][0]))
-    CORs_all.append(float(stats_by_year_wsa[i]['ccoef'][0]))
+    STDs_all.append(float(stats_by_year_wsa[i]['sdev'][1]))
+    RMSs_all.append(float(stats_by_year_wsa[i]['crmsd'][1]))
+    CORs_all.append(float(stats_by_year_wsa[i]['ccoef'][1]))
     labels_all.append(f'{year} WSA')
 
 sm.taylor_diagram(np.array(STDs_all), np.array(RMSs_all), np.array(CORs_all),
