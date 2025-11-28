@@ -496,8 +496,8 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
     
     # Save if requested
     if figname:
-        fig.savefig(f'{figname}.png', dpi=dpi, bbox_inches='tight')
-        print(f"Saved figure as {figname}.png")
+        fig.savefig(f'{figname}.pdf', dpi=dpi, bbox_inches='tight')
+        print(f"Saved figure as {figname}.pdf")
     
     return fig, (ax_taylor, ax_target)
 
