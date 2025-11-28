@@ -7,7 +7,7 @@ Run InSitu-HUXt forecasts for a date range
 Analyse and compare forecasts with WSA-HUXt
 """
 
-
+# <codecell> import libraries
 
 import datetime
 import numpy as np
@@ -34,7 +34,7 @@ import huxt_analysis as HA
 
 import huxt_insitu as His
 
-start_time = datetime.datetime(2024,3,1)
+start_time = datetime.datetime(2020,3,1)
 stop_time = datetime.datetime(2024,8,1)
 
 #HUXt run parameters
@@ -91,7 +91,7 @@ omni_noicmes = His.removeICMEs(omni,
 
 
 
-ftime = datetime.datetime(2024,5,1)
+ftime = datetime.datetime(2022,5,1)
 model = His.omniHUXt_forecast(ftime, simtime = 27.27*u.day, 
                             rmin = rmin, rmax = rmax, 
                             dt_scale = dt_scale,

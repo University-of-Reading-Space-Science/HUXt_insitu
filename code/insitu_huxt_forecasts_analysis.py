@@ -31,6 +31,8 @@ import huxt as H
 import huxt_inputs as Hin
 import huxt_analysis as HA
 
+import huxt_insitu as His
+
 import insitu
 import helio_coords as hcoords
 from taylor_diagram import combined_taylor_target_diagram, plot_taylor_target_diagram
@@ -48,7 +50,7 @@ rmax = 230*u.solRad #outer boundary for HUXt runs
 min_lt = 1
 max_lt = 27
 
-compute_forecast_timeseries_now = True
+compute_forecast_timeseries_now = False
 
 icme_list = 'CaneRichardson'#'DONKI'
 pre_icme_buffer = 0.2 #days
@@ -70,7 +72,8 @@ compute_forecast_timeseries_now = False
 
 #directory structure
 cwd = os.path.dirname(os.path.realpath(__file__))
-figdir =  os.path.join(os.path.dirname(cwd), 'figures' )
+#figdir =  os.path.join(os.path.dirname(cwd), 'figures' )
+figdir = os.path.join(os.getenv('DBOX'), 'Apps','Overleaf','InSitu-HUXt_forecast' )
 datadir = os.path.join(os.path.dirname(cwd), 'data')
 icmelist_path = os.path.join(datadir, 'Richardson_Cane_Porcessed_ICME_list.csv')
 ishuxt_dir = os.path.join(os.getenv('DBOX'), 'Data', 'InSitu_HUXt')
@@ -466,6 +469,120 @@ fig_example.tight_layout()
 fig_example.savefig(os.path.join(figdir, f'example_forecast_{example_forecast_date.strftime("%Y%m%d")}.pdf'), 
                     dpi=150, bbox_inches='tight')
 print(f"Saved example forecast plot as example_forecast_{example_forecast_date.strftime('%Y%m%d')}.pdf")
+
+# <codecell> Also plot the ecliptic solutions for this same example period
+
+# Create interpolated version for HUXt input
+omni_noicmes_interp = omni_noicmes.copy()
+omni_noicmes_interp = omni_noicmes_interp.set_index('datetime')
+omni_noicmes_interp[['V', 'BX_GSE']] = omni_noicmes_interp[['V', 'BX_GSE']].interpolate(method='time').ffill().bfill()
+omni_noicmes_interp = omni_noicmes_interp.reset_index()
+
+model_insitu = His.omniHUXt_forecast(example_forecast_date, simtime = 27*u.day, 
+                            rmin = rmin, rmax = rmax, 
+                            dt_scale = dt_scale,
+                            omni_input = omni_noicmes_interp, 
+                            buffertime = 0*u.day, run_2d = True)
+model_insitu.solve([])  
+fig_insitu, ax_insitu = HA.plot(model_insitu, time = 0*u.day)
+plt.close(fig_insitu)  # Close the individual figure
+
+#find and run the WSA-HUXt for the same date
+# Construct the WSA fits file path for the example forecast date
+# Files are in YEAR subdirectory with format: vel_YYYYMMDDHHmmR000_gong_z.fits
+wsa_fits_dir = os.path.join(os.getenv('DBOX'), 'Data', 'WSA_CCMC')
+yr_str = str(example_forecast_date.year)
+
+# Search for WSA file matching the date (format: vel_YYYYMMDDHHmmR000_gong_z.fits)
+wsa_date_pattern = example_forecast_date.strftime('%Y%m%d')
+wsa_search_pattern = os.path.join(wsa_fits_dir, yr_str, f'vel_{wsa_date_pattern}*_gong_z.fits')
+matching_wsa_files = glob.glob(wsa_search_pattern)
+
+if matching_wsa_files:
+    # Use the first matching file (or closest to start of day)
+    matching_wsa_files.sort()
+    wsa_fits_filepath = matching_wsa_files[0]
+    print(f"Found WSA fits file: {wsa_fits_filepath}")
+else:
+    print(f"No WSA fits file found for {example_forecast_date.strftime('%Y-%m-%d')}")
+    print(f"Searched: {wsa_search_pattern}")
+    wsa_fits_filepath = None
+
+cr, cr_lon_init = Hin.datetime2huxtinputs(example_forecast_date)
+
+vr_in = Hin.get_WSA_long_profile(wsa_fits_filepath, lat=4*u.deg)
+model_wsa = H.HUXt(v_boundary=vr_in, cr_num=cr, 
+                   cr_lon_init=cr_lon_init,
+                    r_min = rmin, r_max = rmax, 
+                    dt_scale = dt_scale, latitude = 4*u.deg,
+                    simtime = 1*u.day)
+model_wsa.solve([])  
+fig_wsa, ax_wsa = HA.plot(model_wsa, time = 0*u.day)
+plt.close(fig_wsa)  # Close the individual figure
+
+# Create combined figure with both plots side by side
+fig_combined_ecliptic, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10), 
+                                                   subplot_kw={"projection": "polar"})
+
+# Re-plot InSitu-HUXt on the left subplot (minimalplot=True to suppress colorbar)
+HA.plot(model_insitu, time=0*u.day, fighandle=fig_combined_ecliptic, axhandle=ax1, minimalplot=True)
+ax1.set_title(f'InSitu-HUXt\n({example_forecast_date.strftime("%Y-%m-%d")})', 
+              fontsize=14, fontweight='bold', color=color_insitu, pad=20)
+
+# Re-plot WSA-HUXt on the right subplot (minimalplot=True to suppress colorbar)
+HA.plot(model_wsa, time=0*u.day, fighandle=fig_combined_ecliptic, axhandle=ax2, minimalplot=True)
+ax2.set_title(f'WSA-HUXt\n({example_forecast_date.strftime("%Y-%m-%d")})', 
+              fontsize=14, fontweight='bold', color=color_wsa, pad=20)
+
+# Add planet positions to both subplots
+def add_observers(ax, model, time=0*u.day):
+    """Add observer/planet positions to a polar plot."""
+    id_t = np.argmin(np.abs(model.time_out - time))
+    
+    # Define which bodies to plot
+    plot_observers = [('EARTH', 'ko'), ('STA', 'c*')]
+    if model.time_init < datetime.datetime(2016, 8, 21):
+        plot_observers.append(('STB', 'y*'))
+    if model.r[-1] < 350 * u.solRad:
+        plot_observers.append(('VENUS', 'yo'))
+        plot_observers.append(('MERCURY', 'mo'))
+    if model.r[-1] > 350 * u.solRad:
+        plot_observers.append(('MARS', 'ro'))
+    
+    for body, style in plot_observers:
+        obs = model.get_observer(body)
+        deltalon = 0.0 * u.rad
+        if model.frame == 'sidereal':
+            earth_pos = model.get_observer('EARTH')
+            deltalon = earth_pos.lon_hae[id_t] - earth_pos.lon_hae[0]
+        obslon = H._zerototwopi_(obs.lon[id_t] + deltalon)
+        ax.plot(obslon, obs.r[id_t], style, markersize=14, label=body)
+    
+    # Add legend
+    ax.legend(ncol=5, loc='lower center', frameon=False, fontsize=12, 
+              handletextpad=0.2, columnspacing=1.0, bbox_to_anchor=(0.5, -0.15))
+
+add_observers(ax1, model_insitu, time=0*u.day)
+add_observers(ax2, model_wsa, time=0*u.day)
+
+# Add a single shared colorbar at the bottom
+import matplotlib as mpl
+cmap = mpl.cm.viridis
+norm = mpl.colors.Normalize(vmin=200, vmax=810)
+sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
+sm.set_array([])
+
+# Position the colorbar below both plots
+cbar_ax = fig_combined_ecliptic.add_axes([0.25, 0.05, 0.5, 0.025])
+cbar = fig_combined_ecliptic.colorbar(sm, cax=cbar_ax, orientation='horizontal')
+cbar.set_label(r'$V_{SW}$ [km/s]', fontsize=14)
+cbar.set_ticks(np.arange(200, 850, 100))
+
+fig_combined_ecliptic.suptitle('Ecliptic Solar Wind Solutions', fontsize=16, fontweight='bold', y=0.98)
+fig_combined_ecliptic.subplots_adjust(bottom=0.15, top=0.92)
+fig_combined_ecliptic.savefig(os.path.join(figdir, f'ecliptic_comparison_{example_forecast_date.strftime("%Y%m%d")}.pdf'), 
+                               dpi=150, bbox_inches='tight')
+print(f"Saved ecliptic comparison plot as ecliptic_comparison_{example_forecast_date.strftime('%Y%m%d')}.pdf")
 
 
 # <codecell> Compute point-wise statistics for Taylor diagrams

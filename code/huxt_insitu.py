@@ -30,7 +30,16 @@ import helio_coords as hcoords
 
 # <codecell> remove ICMEs
 def _setup_dirs_():
+    """
+    Set up directory paths for data access.
     
+    Returns
+    -------
+    dirs : dict
+        Dictionary containing:
+        - 'datapath': Path to the Data directory
+        - 'root': Path to the root project directory
+    """
     cwd = os.path.abspath(os.path.dirname(__file__))
     root = os.path.dirname(cwd)
     datapath = os.path.join(root,'Data')
@@ -41,17 +50,40 @@ def _setup_dirs_():
     return dirs
 
 def ICMElist(filepath = None):
-    # -*- coding: utf-8 -*-
     """
-    A script to read and process Ian Richardson's ICME list.
-
-    Some pre-processing is required:
-        Download the following webpage as a html file: 
-            http://www.srl.caltech.edu/ACE/ASC/DATA/level3/icmetable2.htm
-        Open in Excel, remove the year rows, delete last column (S) which is empty
-        Cut out the data table only (delete header and footer)
-        Save as a CSV.
-
+    Read and process the Richardson & Cane ICME list.
+    
+    Reads the pre-processed CSV file of ICMEs detected at Earth from the 
+    Richardson & Cane catalog. The original data is from:
+    http://www.srl.caltech.edu/ACE/ASC/DATA/level3/icmetable2.htm
+    
+    Pre-processing required for raw HTML:
+        1. Download the webpage as an HTML file
+        2. Open in Excel, remove year header rows
+        3. Delete last column (S) which is empty
+        4. Cut out the data table only (delete header and footer)
+        5. Save as CSV
+    
+    Parameters
+    ----------
+    filepath : str, optional
+        Path to the processed CSV file. If None, uses the default path
+        in the Data directory ('Richardson_Cane_Porcessed_ICME_list.csv').
+    
+    Returns
+    -------
+    icmes : pandas.DataFrame
+        DataFrame containing ICME events with columns:
+        - 'Shock_time': datetime of shock arrival
+        - 'ICME_start': datetime of ICME start
+        - 'ICME_end': datetime of ICME end
+        - 'dV': velocity change [km/s]
+        - 'V_mean': mean velocity [km/s]
+        - 'V_max': maximum velocity [km/s]
+        - 'Bmag': magnetic field magnitude [nT]
+        - 'MCflag': magnetic cloud flag
+        - 'Dst': Dst index [nT]
+        - 'V_transit': transit velocity [km/s]
     """
     
     if filepath is None:
@@ -112,8 +144,42 @@ def ICMElist(filepath = None):
 
 def STEREO_ICME_list(filepath = None, download_now = False):
     """
-    a script to read in Lan Jian's STEREO  ICME list, from:
-    https://stereo-ssc.nascom.nasa.gov/pub/ins_data/impact/level3/LanJian_STEREO_ICME_List.txt
+    Read Lan Jian's STEREO ICME list.
+    
+    Loads the STEREO ICME catalog maintained by Lan Jian, containing ICMEs
+    detected by the STEREO-A and STEREO-B spacecraft.
+    
+    Source: https://stereo-ssc.nascom.nasa.gov/pub/ins_data/impact/level3/LanJian_STEREO_ICME_List.txt
+    
+    Parameters
+    ----------
+    filepath : str, optional
+        Path to the ICME list file. If None, uses the default path
+        in the Data directory ('LanJian_STEREO_ICME_List.txt').
+    download_now : bool, optional
+        If True, downloads the latest version of the file from the 
+        STEREO SSC server before reading. Default is False.
+    
+    Returns
+    -------
+    data : pandas.DataFrame
+        DataFrame containing STEREO ICME events with columns:
+        - 'ICME_start': datetime of ICME start
+        - 'ICME_end': datetime of ICME end  
+        - 'magnetic_obstacle_start_time': datetime of magnetic obstacle start
+        - 'STEREO': spacecraft identifier ('A' or 'B')
+        - 'hybrid_event': hybrid event flag
+        - 'ambiguous_event': ambiguous event flag
+        - 'Ptmax_including_sheath': max total pressure including sheath [nPa]
+        - 'Bmax_including_sheath': max B field including sheath [nT]
+        - 'Vmax_including_sheath': max velocity including sheath [km/s]
+        - 'Ptmax_excluding_sheath': max total pressure excluding sheath [nPa]
+        - 'Bmax_excluding_sheath': max B field excluding sheath [nT]
+        - 'Vmax_excluding_sheath': max velocity excluding sheath [km/s]
+        - 'speed_change': velocity change [km/s]
+        - 'Group': event group classification
+        - 'magnetic_cloud_index': magnetic cloud quality index
+        - 'Comment': additional notes
     """
     
     if filepath is None:
@@ -160,7 +226,43 @@ def removeICMEs(omni,
                 pre_icme_buffer = 0.2, #days
                 post_icme_buffer = 1, #days
                 interp_gaps = True ):
+    """
+    Remove ICME periods from OMNI solar wind data.
     
+    Identifies ICME events in the input OMNI data using a specified catalog
+    and replaces the affected time periods with NaN values. Optionally 
+    interpolates through the resulting data gaps.
+    
+    Parameters
+    ----------
+    omni : pandas.DataFrame
+        OMNI solar wind data with columns 'datetime', 'mjd', 'V', and 'BX_GSE'.
+    icme_list : str, optional
+        Which ICME catalog to use. Options are:
+        - 'CaneRichardson': Richardson & Cane near-Earth ICME list (default)
+        - 'DONKI': NASA DONKI ICME database
+    pre_icme_buffer : float, optional
+        Time buffer before ICME shock arrival to also remove, in days.
+        Default is 0.2 days.
+    post_icme_buffer : float, optional
+        Time buffer after ICME end to also remove, in days.
+        Default is 1 day.
+    interp_gaps : bool, optional
+        If True, interpolate through the data gaps created by ICME removal
+        using time-weighted interpolation with forward/backward fill for edges.
+        Default is True.
+    
+    Returns
+    -------
+    omni_noicmes : pandas.DataFrame
+        Copy of input OMNI data with ICME periods removed (set to NaN or 
+        interpolated depending on interp_gaps setting).
+    
+    Notes
+    -----
+    Only the 'V' (velocity) and 'BX_GSE' (radial magnetic field) columns
+    are modified. Other columns remain unchanged.
+    """
     #create a copy of the OMNI data for ICME removal
     omni_noicmes = omni.copy()
     
@@ -254,7 +356,62 @@ def correct_inner_vlon_cnn_onnx(v_inner_array,
 def omniHUXt_forecast(ftime, simtime = 27.27*u.day, 
                         rmin = 21.5*u.solRad, rmax = 230*u.solRad, 
                         dt_scale = 4,
-                        omni_input = None, buffertime = 5*u.day):
+                        omni_input = None, buffertime = 5*u.day,
+                        run_2d = False):
+    """
+    Create a HUXt solar wind forecast initialized from in-situ OMNI observations.
+    
+    Uses the previous solar rotation of OMNI data (mapped back to the inner 
+    boundary) to create a Carrington map of solar wind speed, applies a CNN
+    correction for stream interaction effects, and initializes a HUXt model
+    to forecast solar wind conditions at Earth.
+    
+    Parameters
+    ----------
+    ftime : datetime.datetime
+        Forecast initialization time. The model uses OMNI data from the
+        previous ~27 days to construct the inner boundary condition.
+    simtime : astropy.units.Quantity, optional
+        Total simulation duration. Default is 27.27 days (one Carrington rotation).
+    rmin : astropy.units.Quantity, optional
+        Inner boundary radius for the HUXt model. Default is 21.5 solar radii.
+    rmax : astropy.units.Quantity, optional  
+        Outer boundary radius for the HUXt model. Default is 230 solar radii.
+    dt_scale : int, optional
+        Time step scaling factor for HUXt. Higher values = faster but less
+        accurate. Default is 4.
+    omni_input : pandas.DataFrame, optional
+        Pre-loaded OMNI data with ICMEs already removed. If None, the function
+        will download OMNI data and remove ICMEs automatically. Should contain
+        columns 'datetime', 'mjd', 'V', and 'BX_GSE'.
+    buffertime : astropy.units.Quantity, optional
+        Buffer time before ftime to start the simulation, allowing transients
+        to propagate through the domain. Default is 5 days.
+    run_2d : bool, optional
+        If False (default), runs a 1D radial simulation at Earth's longitude
+        (lon_out=0). If True, runs a full 2D simulation across all longitudes.
+    
+    Returns
+    -------
+    model : huxt.HUXt
+        Initialized (but not yet solved) HUXt model object. Call model.solve([])
+        to run the simulation.
+    
+    Notes
+    -----
+    The CNN correction (correct_inner_vlon_cnn_onnx) accounts for stream 
+    interaction effects that occur during the backmapping process from 1 AU
+    to the inner boundary at ~21.5 solar radii.
+    
+    Examples
+    --------
+    >>> import datetime
+    >>> ftime = datetime.datetime(2022, 5, 1)
+    >>> model = omniHUXt_forecast(ftime, simtime=27*u.day)
+    >>> model.solve([])
+    >>> # Extract Earth time series
+    >>> ts = HA.get_observer_timeseries(model, observer='Earth')
+    """
     run_start = ftime 
     #run_stop = ftime + datetime.timedelta(days=simtime.value)
     #simtime = (run_stop-run_start).days * u.day
@@ -316,10 +473,18 @@ def omniHUXt_forecast(ftime, simtime = 27.27*u.day,
     #set up the model run to start 5 days before the forecast time, to allow for CMEs
     cr, cr_lon_init = Hin.datetime2huxtinputs(ftime - datetime.timedelta(days = buffertime.value))
     Elat = Hin.get_earth_lat(ftime)
-    model = H.HUXt(v_boundary = vcarr_rmin_back_cnn.flatten() * u.km/u.s, 
-                              cr_num = cr, cr_lon_init=cr_lon_init,
-                               simtime = simtime, r_min=rmin, r_max=rmax, 
-                                dt_scale=dt_scale, latitude=Elat, frame = 'synodic', 
-                                track_cmes = False, lon_out = 0*u.rad)
+    
+    if run_2d:
+        model = H.HUXt(v_boundary = vcarr_rmin_back_cnn.flatten() * u.km/u.s, 
+                                  cr_num = cr, cr_lon_init=cr_lon_init,
+                                   simtime = simtime, r_min=rmin, r_max=rmax, 
+                                    dt_scale=dt_scale, latitude=Elat, frame = 'synodic', 
+                                    track_cmes = False)
+    else:
+        model = H.HUXt(v_boundary = vcarr_rmin_back_cnn.flatten() * u.km/u.s, 
+                                  cr_num = cr, cr_lon_init=cr_lon_init,
+                                   simtime = simtime, r_min=rmin, r_max=rmax, 
+                                    dt_scale=dt_scale, latitude=Elat, frame = 'synodic', 
+                                    track_cmes = False, lon_out = 0*u.rad)
     return model
 
