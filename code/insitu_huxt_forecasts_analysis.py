@@ -33,9 +33,11 @@ import huxt_analysis as HA
 
 import insitu
 import helio_coords as hcoords
+from taylor_diagram import combined_taylor_target_diagram, plot_taylor_target_diagram
+import hse  # High-Speed Enhancement detection and analysis
 
-start_time = datetime.datetime(2007,1,1)
-stop_time = datetime.datetime(2008,1,1)#datetime.datetime(2023,1,1)
+start_time = datetime.datetime(2007,5,1)
+stop_time = datetime.datetime(2023,1,1)#datetime.datetime(2023,1,1)
 
 #HUXt run parameters
 dt_scale = 4
@@ -267,9 +269,7 @@ axs.set_title(str(start_time.year) + ' to ' + str(stop_time.year), fontsize = 14
 axs.legend()
 
 
-# <codecell> Taylor diagrams
-
-import skill_metrics as sm
+# <codecell> Compute point-wise statistics for Taylor diagrams
 
 # Taylor diagram for overall period (using plot_lead_time)
 # Get the data for the chosen lead time
@@ -283,38 +283,33 @@ obs_clean = obs[mask]
 pred_insitu_clean = pred_insitu[mask]
 pred_wsa_clean = pred_wsa[mask]
 
-# Calculate statistics for Taylor diagram
-stats_insitu = sm.taylor_statistics(pred_insitu_clean, obs_clean)
-stats_wsa = sm.taylor_statistics(pred_wsa_clean, obs_clean)
+# Calculate regular RMSD for comparison
+rmsd_insitu = np.sqrt(np.mean((pred_insitu_clean - obs_clean)**2))
+rmsd_wsa = np.sqrt(np.mean((pred_wsa_clean - obs_clean)**2))
+mae_insitu = np.mean(np.abs(pred_insitu_clean - obs_clean))
+mae_wsa = np.mean(np.abs(pred_wsa_clean - obs_clean))
 
-# Create Taylor diagram for overall period with both models
-fig = plt.figure(figsize=(8, 8))
+print(f"\n{plot_lead_time}-day lead time statistics:")
+print(f"InSitu-HUXt: MAE = {mae_insitu:.1f} km/s, RMSD = {rmsd_insitu:.1f} km/s")
+print(f"WSA-HUXt:    MAE = {mae_wsa:.1f} km/s, RMSD = {rmsd_wsa:.1f} km/s")
 
-# Combine both statistics into arrays
-# Note: [0] is reference statistics (obs), [1] is prediction statistics (model)
-# We must include the reference stats as the first element for taylor_diagram
-STDs = np.array([float(stats_insitu['sdev'][0]), float(stats_insitu['sdev'][1]), float(stats_wsa['sdev'][1])])
-RMSs = np.array([float(stats_insitu['crmsd'][0]), float(stats_insitu['crmsd'][1]), float(stats_wsa['crmsd'][1])])
-CORs = np.array([float(stats_insitu['ccoef'][0]), float(stats_insitu['ccoef'][1]), float(stats_wsa['ccoef'][1])])
+# Calculate statistics for target diagram
+obs_std = np.std(obs_clean, ddof=1)
+obs_mean = np.mean(obs_clean)
+bias_insitu = np.mean(pred_insitu_clean - obs_clean)
+bias_wsa = np.mean(pred_wsa_clean - obs_clean)
 
-sm.taylor_diagram(STDs, RMSs, CORs,
-                  markerLabel=['Obs', 'InSitu-HUXt', 'WSA-HUXt'], 
-                  markerSize=10,
-                  tickRMS=[50, 100, 150, 200], 
-                  styleOBS='-',
-                  colOBS='k', markerobs='o', titleOBS='Obs')
+# Calculate unbiased RMSD (centered RMSD)
+ubrmsd_insitu = np.sqrt(np.mean((pred_insitu_clean - obs_clean - bias_insitu)**2))
+ubrmsd_wsa = np.sqrt(np.mean((pred_wsa_clean - obs_clean - bias_wsa)**2))
 
-plt.title(f'Taylor Diagram: {plot_lead_time}-day lead time\n{start_time.year} to {stop_time.year}', 
-          fontsize=14, pad=20)
-plt.tight_layout()
-
-
-# <codecell> Taylor diagram by year
+# <codecell> Calculate stats for combined diagrams
 
 # Calculate stats for each year
 years = range(start_time.year, stop_time.year)
-stats_by_year_insitu = []
-stats_by_year_wsa = []
+obs_by_year = []
+pred_insitu_by_year = []
+pred_wsa_by_year = []
 year_labels = []
 
 for year in years:
@@ -333,50 +328,325 @@ for year in years:
     mask_valid = ~(np.isnan(obs_year) | np.isnan(pred_insitu_year) | np.isnan(pred_wsa_year))
     
     if np.sum(mask_valid) > 100:  # Only include years with sufficient data
-        obs_year_clean = obs_year[mask_valid]
-        pred_insitu_year_clean = pred_insitu_year[mask_valid]
-        pred_wsa_year_clean = pred_wsa_year[mask_valid]
-        
-        stats_by_year_insitu.append(sm.taylor_statistics(pred_insitu_year_clean, obs_year_clean))
-        stats_by_year_wsa.append(sm.taylor_statistics(pred_wsa_year_clean, obs_year_clean))
+        obs_by_year.append(obs_year[mask_valid])
+        pred_insitu_by_year.append(pred_insitu_year[mask_valid])
+        pred_wsa_by_year.append(pred_wsa_year[mask_valid])
         year_labels.append(str(year))
 
-# Create Taylor diagram by year
-fig = plt.figure(figsize=(10, 10))
+# Create normalized data (across all years)
+obs_all_years = np.concatenate(obs_by_year)
+pred_insitu_all_years = np.concatenate(pred_insitu_by_year)
+pred_wsa_all_years = np.concatenate(pred_wsa_by_year)
 
-# Prepare arrays for all years - both InSitu and WSA
-# Normalize statistics by the observation standard deviation of each year
-# This allows plotting multiple years with different variances on the same diagram
-STDs_norm = [1.0]  # Reference STD is always 1.0 after normalization
-RMSs_norm = [0.0]  # Reference RMSE is 0.0
-CORs_norm = [1.0]  # Reference Correlation is 1.0
-labels_all = ['Obs']
+# <codecell> Create combined Taylor and Target diagrams
 
-for i, year in enumerate(year_labels):
-    obs_std = float(stats_by_year_insitu[i]['sdev'][0])
+# Combined diagram for overall period
+fig_combined, (ax_t, ax_tg) = combined_taylor_target_diagram(
+    obs_clean,
+    [pred_insitu_clean, pred_wsa_clean],
+    labels=['InSitu-HUXt', 'WSA-HUXt'],
+    colors=['#2E86AB', '#A23B72'],
+    figsize=(16, 7),
+    dpi=150,
+    units='[km/s]',
+    figname=os.path.join(figdir, f'combined_diagram_{plot_lead_time}day')
+)
+
+# Combined diagram for normalized version (across all years)
+fig_combined_norm, (ax_t_norm, ax_tg_norm) = combined_taylor_target_diagram(
+    obs_all_years,
+    [pred_insitu_all_years, pred_wsa_all_years],
+    labels=['InSitu-HUXt', 'WSA-HUXt'],
+    colors=['#2E86AB', '#A23B72'],
+    figsize=(16, 7),
+    dpi=150,
+    normalize=True,
+    figname=os.path.join(figdir, f'combined_diagram_{plot_lead_time}day_normalized')
+)
+
+
+# <codecell> High-Speed Enhancement (HSE) Event-Based Analysis
+# =============================================================
+# Detect HSE events in observations and forecasts, then compute
+# timing errors and peak speed errors following Owens (2005) method
+# =============================================================
+
+print("\n" + "="*60)
+print(f"HIGH-SPEED ENHANCEMENT ANALYSIS ({plot_lead_time}-day lead time)")
+print("="*60)
+
+# Prepare dataframes for HSE detection
+# Need datetime index and speed columns
+
+# Create observation dataframe
+obs_df = pd.DataFrame({
+    'datetime': omni_noicmes['datetime'].values,
+    'V': omni_noicmes['V'].values
+})
+obs_df = obs_df.set_index('datetime')
+
+# Create InSitu-HUXt forecast dataframe for the selected lead time
+insitu_times = pd.to_datetime(combined_for_list[plot_lead_time-1]['time'].values)
+insitu_df = pd.DataFrame({
+    'datetime': insitu_times.round('h'),  # Round to nearest hour for alignment
+    'V': combined_for_list[plot_lead_time-1]['vsw'].values
+})
+insitu_df = insitu_df.set_index('datetime')
+
+# Create WSA-HUXt forecast dataframe for the selected lead time
+wsa_times = pd.to_datetime(combined_for_wsa_list[plot_lead_time-1]['time'].values)
+wsa_df = pd.DataFrame({
+    'datetime': wsa_times.round('h'),  # Round to nearest hour for alignment
+    'V': combined_for_wsa_list[plot_lead_time-1]['vsw'].values
+})
+wsa_df = wsa_df.set_index('datetime')
+
+# Apply 8-hour smoothing (as per hse.py methodology)
+obs_smoothed = hse.smooth_8h(obs_df.reset_index(), date_col='datetime', window_hours=8)
+insitu_smoothed = hse.smooth_8h(insitu_df.reset_index(), date_col='datetime', window_hours=8)
+wsa_smoothed = hse.smooth_8h(wsa_df.reset_index(), date_col='datetime', window_hours=8)
+
+# Detect HSE events in each time series
+# Parameters: rise_threshold=100 km/s over 48 hours, min_separation=72 hours
+events_obs = hse.detect_hss_events(obs_smoothed, speed_col='V', 
+                                    rise_threshold=100, rise_hours=48, 
+                                    min_separation_hours=72)
+events_insitu = hse.detect_hss_events(insitu_smoothed, speed_col='V',
+                                       rise_threshold=100, rise_hours=48,
+                                       min_separation_hours=72)
+events_wsa = hse.detect_hss_events(wsa_smoothed, speed_col='V',
+                                    rise_threshold=100, rise_hours=48,
+                                    min_separation_hours=72)
+
+print(f"\nHSE Events Detected:")
+print(f"  Observations:  {len(events_obs)} events")
+print(f"  InSitu-HUXt:   {len(events_insitu)} events")
+print(f"  WSA-HUXt:      {len(events_wsa)} events")
+
+# Match events between observations and forecasts
+# Using Owens (2005) method with 48-hour maximum timing difference
+matches_insitu, unmatched_obs_insitu, unmatched_insitu = hse.match_events(
+    events_obs, events_insitu, delta_t_max=48)
+matches_wsa, unmatched_obs_wsa, unmatched_wsa = hse.match_events(
+    events_obs, events_wsa, delta_t_max=48)
+
+print(f"\nEvent Matching Results (max Δt = 48 hours):")
+print(f"  InSitu-HUXt: {len(matches_insitu)} matched, "
+      f"{len(unmatched_obs_insitu)} missed, {len(unmatched_insitu)} false alarms")
+print(f"  WSA-HUXt:    {len(matches_wsa)} matched, "
+      f"{len(unmatched_obs_wsa)} missed, {len(unmatched_wsa)} false alarms")
+
+# Compute timing errors for matched events (using event start/arrival time)
+if len(matches_insitu) > 0:
+    timing_errors_insitu = hse.compute_timing_errors(matches_insitu, use='start')
+    timing_stats_insitu = hse.summary_error_stats(timing_errors_insitu)
+    speed_errors_insitu, speed_stats_insitu = hse.peak_speed_errors(matches_insitu)
+else:
+    timing_errors_insitu = []
+    timing_stats_insitu = {'mean_error': np.nan, 'mean_absolute_error': np.nan, 
+                           'std_error': np.nan, 'n_events': 0}
+    speed_errors_insitu = []
+    speed_stats_insitu = {'mean_error': np.nan, 'mean_absolute_error': np.nan, 
+                          'std_error': np.nan, 'n_events': 0}
+
+if len(matches_wsa) > 0:
+    timing_errors_wsa = hse.compute_timing_errors(matches_wsa, use='start')
+    timing_stats_wsa = hse.summary_error_stats(timing_errors_wsa)
+    speed_errors_wsa, speed_stats_wsa = hse.peak_speed_errors(matches_wsa)
+else:
+    timing_errors_wsa = []
+    timing_stats_wsa = {'mean_error': np.nan, 'mean_absolute_error': np.nan, 
+                        'std_error': np.nan, 'n_events': 0}
+    speed_errors_wsa = []
+    speed_stats_wsa = {'mean_error': np.nan, 'mean_absolute_error': np.nan, 
+                       'std_error': np.nan, 'n_events': 0}
+
+# Print timing error statistics
+print(f"\nHSE Arrival Timing Errors (hours):")
+print(f"  InSitu-HUXt:")
+print(f"    Mean Error:     {timing_stats_insitu['mean_error']:+.1f} h "
+      f"({'early' if timing_stats_insitu['mean_error'] < 0 else 'late'} bias)")
+print(f"    Mean Abs Error: {timing_stats_insitu['mean_absolute_error']:.1f} h")
+print(f"    Std Dev:        {timing_stats_insitu['std_error']:.1f} h")
+print(f"    N events:       {timing_stats_insitu['n_events']}")
+
+print(f"  WSA-HUXt:")
+print(f"    Mean Error:     {timing_stats_wsa['mean_error']:+.1f} h "
+      f"({'early' if timing_stats_wsa['mean_error'] < 0 else 'late'} bias)")
+print(f"    Mean Abs Error: {timing_stats_wsa['mean_absolute_error']:.1f} h")
+print(f"    Std Dev:        {timing_stats_wsa['std_error']:.1f} h")
+print(f"    N events:       {timing_stats_wsa['n_events']}")
+
+# Print peak speed error statistics
+print(f"\nHSE Peak Speed Errors (km/s):")
+print(f"  InSitu-HUXt:")
+print(f"    Mean Error:     {speed_stats_insitu['mean_error']:+.1f} km/s")
+print(f"    Mean Abs Error: {speed_stats_insitu['mean_absolute_error']:.1f} km/s")
+print(f"    Std Dev:        {speed_stats_insitu['std_error']:.1f} km/s")
+
+print(f"  WSA-HUXt:")
+print(f"    Mean Error:     {speed_stats_wsa['mean_error']:+.1f} km/s")
+print(f"    Mean Abs Error: {speed_stats_wsa['mean_absolute_error']:.1f} km/s")
+print(f"    Std Dev:        {speed_stats_wsa['std_error']:.1f} km/s")
+
+# Calculate contingency table metrics
+# Hit Rate (Probability of Detection): matched / (matched + missed)
+# False Alarm Rate: false_alarms / (matched + false_alarms)
+# Critical Success Index: matched / (matched + missed + false_alarms)
+
+def contingency_metrics(n_matched, n_missed, n_false_alarms):
+    """Calculate contingency table metrics for event detection."""
+    total_obs = n_matched + n_missed
+    total_forecast = n_matched + n_false_alarms
     
-    # Add InSitu-HUXt point
-    STDs_norm.append(float(stats_by_year_insitu[i]['sdev'][1]) / obs_std)
-    RMSs_norm.append(float(stats_by_year_insitu[i]['crmsd'][1]) / obs_std)
-    CORs_norm.append(float(stats_by_year_insitu[i]['ccoef'][1]))
-    labels_all.append(f'{year} InSitu')
+    hit_rate = n_matched / total_obs if total_obs > 0 else np.nan
+    false_alarm_ratio = n_false_alarms / total_forecast if total_forecast > 0 else np.nan
+    csi = n_matched / (n_matched + n_missed + n_false_alarms) if (n_matched + n_missed + n_false_alarms) > 0 else np.nan
+    bias = total_forecast / total_obs if total_obs > 0 else np.nan
     
-    # Add WSA-HUXt point
-    STDs_norm.append(float(stats_by_year_wsa[i]['sdev'][1]) / obs_std)
-    RMSs_norm.append(float(stats_by_year_wsa[i]['crmsd'][1]) / obs_std)
-    CORs_norm.append(float(stats_by_year_wsa[i]['ccoef'][1]))
-    labels_all.append(f'{year} WSA')
+    return {
+        'hit_rate': hit_rate,
+        'false_alarm_ratio': false_alarm_ratio,
+        'critical_success_index': csi,
+        'frequency_bias': bias
+    }
 
-sm.taylor_diagram(np.array(STDs_norm), np.array(RMSs_norm), np.array(CORs_norm),
-                  markerLabel=labels_all,
-                  markerSize=8,
-                  tickRMS=[0.5, 1.0, 1.5],
-                  styleOBS='-',
-                  colOBS='k', markerobs='o', titleOBS='Obs')
+metrics_insitu = contingency_metrics(len(matches_insitu), len(unmatched_obs_insitu), len(unmatched_insitu))
+metrics_wsa = contingency_metrics(len(matches_wsa), len(unmatched_obs_wsa), len(unmatched_wsa))
 
-plt.title(f'Normalized Taylor Diagram by Year: {plot_lead_time}-day lead time', 
-          fontsize=14, pad=20)
-plt.tight_layout()
+print(f"\nHSE Contingency Metrics:")
+print(f"  InSitu-HUXt:")
+print(f"    Hit Rate (POD):          {metrics_insitu['hit_rate']:.2%}")
+print(f"    False Alarm Ratio:       {metrics_insitu['false_alarm_ratio']:.2%}")
+print(f"    Critical Success Index:  {metrics_insitu['critical_success_index']:.2%}")
+print(f"    Frequency Bias:          {metrics_insitu['frequency_bias']:.2f}")
+
+print(f"  WSA-HUXt:")
+print(f"    Hit Rate (POD):          {metrics_wsa['hit_rate']:.2%}")
+print(f"    False Alarm Ratio:       {metrics_wsa['false_alarm_ratio']:.2%}")
+print(f"    Critical Success Index:  {metrics_wsa['critical_success_index']:.2%}")
+print(f"    Frequency Bias:          {metrics_wsa['frequency_bias']:.2f}")
+
+
+# <codecell> Plot HSE error distributions
+
+fig_hse, axs_hse = plt.subplots(2, 2, figsize=(12, 10))
+
+# Timing error histograms
+timing_bins = np.arange(-60, 65, 10)
+
+ax = axs_hse[0, 0]
+if len(timing_errors_insitu) > 0:
+    ax.hist(timing_errors_insitu, bins=timing_bins, alpha=0.7, color='#2E86AB', 
+            edgecolor='black', linewidth=1.2, label='InSitu-HUXt')
+ax.axvline(0, color='k', linestyle='--', linewidth=1)
+ax.set_xlabel('Arrival Timing Error [hours]', fontsize=12)
+ax.set_ylabel('Count', fontsize=12)
+ax.set_title(f'InSitu-HUXt HSE Timing Errors\n(MAE = {timing_stats_insitu["mean_absolute_error"]:.1f} h)', 
+             fontsize=12)
+ax.legend()
+
+ax = axs_hse[0, 1]
+if len(timing_errors_wsa) > 0:
+    ax.hist(timing_errors_wsa, bins=timing_bins, alpha=0.7, color='#A23B72',
+            edgecolor='black', linewidth=1.2, label='WSA-HUXt')
+ax.axvline(0, color='k', linestyle='--', linewidth=1)
+ax.set_xlabel('Arrival Timing Error [hours]', fontsize=12)
+ax.set_ylabel('Count', fontsize=12)
+ax.set_title(f'WSA-HUXt HSE Timing Errors\n(MAE = {timing_stats_wsa["mean_absolute_error"]:.1f} h)', 
+             fontsize=12)
+ax.legend()
+
+# Peak speed error histograms
+speed_bins = np.arange(-300, 350, 50)
+
+ax = axs_hse[1, 0]
+if len(speed_errors_insitu) > 0:
+    ax.hist(speed_errors_insitu, bins=speed_bins, alpha=0.7, color='#2E86AB',
+            edgecolor='black', linewidth=1.2, label='InSitu-HUXt')
+ax.axvline(0, color='k', linestyle='--', linewidth=1)
+ax.set_xlabel('Peak Speed Error [km/s]', fontsize=12)
+ax.set_ylabel('Count', fontsize=12)
+ax.set_title(f'InSitu-HUXt HSE Peak Speed Errors\n(MAE = {speed_stats_insitu["mean_absolute_error"]:.1f} km/s)', 
+             fontsize=12)
+ax.legend()
+
+ax = axs_hse[1, 1]
+if len(speed_errors_wsa) > 0:
+    ax.hist(speed_errors_wsa, bins=speed_bins, alpha=0.7, color='#A23B72',
+            edgecolor='black', linewidth=1.2, label='WSA-HUXt')
+ax.axvline(0, color='k', linestyle='--', linewidth=1)
+ax.set_xlabel('Peak Speed Error [km/s]', fontsize=12)
+ax.set_ylabel('Count', fontsize=12)
+ax.set_title(f'WSA-HUXt HSE Peak Speed Errors\n(MAE = {speed_stats_wsa["mean_absolute_error"]:.1f} km/s)', 
+             fontsize=12)
+ax.legend()
+
+fig_hse.suptitle(f'{plot_lead_time}-Day Lead Time HSE Error Distributions\n'
+                 f'({start_time.year} to {stop_time.year})', fontsize=14, fontweight='bold')
+fig_hse.tight_layout()
+fig_hse.savefig(os.path.join(figdir, f'hse_errors_{plot_lead_time}day.png'), dpi=150, bbox_inches='tight')
+print(f"\nSaved HSE error distributions as hse_errors_{plot_lead_time}day.png")
+
+
+# <codecell> Create HSE summary table
+
+print("\n" + "="*60)
+print("HSE ANALYSIS SUMMARY TABLE")
+print("="*60)
+
+summary_table = pd.DataFrame({
+    'Metric': [
+        'Events Detected',
+        'Matched Events',
+        'Missed Events', 
+        'False Alarms',
+        'Hit Rate (POD)',
+        'False Alarm Ratio',
+        'Critical Success Index',
+        'Timing MAE (hours)',
+        'Timing Bias (hours)',
+        'Peak Speed MAE (km/s)',
+        'Peak Speed Bias (km/s)'
+    ],
+    'InSitu-HUXt': [
+        len(events_insitu),
+        len(matches_insitu),
+        len(unmatched_obs_insitu),
+        len(unmatched_insitu),
+        f"{metrics_insitu['hit_rate']:.1%}",
+        f"{metrics_insitu['false_alarm_ratio']:.1%}",
+        f"{metrics_insitu['critical_success_index']:.1%}",
+        f"{timing_stats_insitu['mean_absolute_error']:.1f}",
+        f"{timing_stats_insitu['mean_error']:+.1f}",
+        f"{speed_stats_insitu['mean_absolute_error']:.1f}",
+        f"{speed_stats_insitu['mean_error']:+.1f}"
+    ],
+    'WSA-HUXt': [
+        len(events_wsa),
+        len(matches_wsa),
+        len(unmatched_obs_wsa),
+        len(unmatched_wsa),
+        f"{metrics_wsa['hit_rate']:.1%}",
+        f"{metrics_wsa['false_alarm_ratio']:.1%}",
+        f"{metrics_wsa['critical_success_index']:.1%}",
+        f"{timing_stats_wsa['mean_absolute_error']:.1f}",
+        f"{timing_stats_wsa['mean_error']:+.1f}",
+        f"{speed_stats_wsa['mean_absolute_error']:.1f}",
+        f"{speed_stats_wsa['mean_error']:+.1f}"
+    ]
+})
+
+# Add observation count for reference
+summary_table.loc[-1] = ['Observed Events', len(events_obs), len(events_obs)]
+summary_table.index = summary_table.index + 1
+summary_table = summary_table.sort_index()
+
+print(summary_table.to_string(index=False))
+
+# Save summary table to CSV
+summary_table.to_csv(os.path.join(figdir, f'hse_summary_{plot_lead_time}day.csv'), index=False)
+print(f"\nSaved HSE summary table as hse_summary_{plot_lead_time}day.csv")
 
 plt.show()
 # %%
