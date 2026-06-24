@@ -32,7 +32,7 @@ def smooth_8h(df, date_col, window_hours=8):
     # Create full hourly index
     full_index = pd.date_range(start=df.index.min(),
                                end=df.index.max(),
-                               freq="H")
+                               freq="h")
 
     # Reindex (missing hours become NaN)
     df = df.reindex(full_index)
@@ -45,7 +45,7 @@ def smooth_8h(df, date_col, window_hours=8):
     return df
 
 
-def detect_hss_events(df, speed_col='V', rise_threshold=100, rise_hours=48, min_separation_hours=72):
+def detect_hss_events(df, speed_col='V', rise_threshold=150, rise_hours=48, min_separation_hours=24):
     """
     Identify high-speed-stream (HSS) events in a solar-wind time series.
 
@@ -59,7 +59,7 @@ def detect_hss_events(df, speed_col='V', rise_threshold=100, rise_hours=48, min_
 
     Returns
     -------
-    events : list of dicts with 'start', 'peak', 'peak_speed'
+    events : list of dicts with 'start', 'peak', 'peak_speed', 'max_gradient_time'
     """
 
     df = df.copy()
@@ -68,59 +68,121 @@ def detect_hss_events(df, speed_col='V', rise_threshold=100, rise_hours=48, min_
     times = df.index
     V = df[speed_col].values
 
-    # convert 48h to number of samples (assuming uniform cadence)
-    dt = (times[1] - times[0]).total_seconds() / 3600
+    # convert rise_hours to number of samples (assuming uniform cadence)
+    dt = (times[1] - times[0]).total_seconds() / 3600  # dt in hours
     step = int(rise_hours / dt)
 
     i = 0
     while i < len(df) - step:
         dv = V[i + step] - V[i]
         if dv >= rise_threshold:
-            # event detected: find local min before rise
-            start_idx = i + np.argmin(V[i:i + step])
-
-            # find peak after rise until descent
-            peak_idx = start_idx
-            for j in range(start_idx, len(V) - 1):
+            # HSE detected at position i+step
+            # The HSE spans from i to i+step at minimum
+            
+            # Find the actual start: the local minimum in the window [i, i+step]
+            start_idx = i + np.argmin(V[i:i + step + 1])
+            
+            # Find the end of HSE: continue until speed stops increasing
+            end_idx = i + step
+            for j in range(i + step, len(V) - 1):
                 if V[j + 1] < V[j]:
+                    # Speed started decreasing
                     break
-                peak_idx = j
+                end_idx = j + 1
+            
+            # Peak is the maximum speed in the HSE period
+            peak_idx = start_idx + np.argmax(V[start_idx:end_idx + 1])
+            
+            # Calculate max gradient time in the rise phase [start_idx, peak_idx]
+            if peak_idx > start_idx + 1:
+                # Calculate gradient at each point in rise phase
+                rise_speeds = V[start_idx:peak_idx + 1]
+                # gradients[j] = (V[start_idx+j+1] - V[start_idx+j]) / dt
+                gradients = np.diff(rise_speeds) / dt
+                # The time of max gradient is at the point where gradient is maximum
+                # np.diff reduces length by 1, so gradient[j] corresponds to time[start_idx+j]
+                max_grad_offset = np.argmax(gradients)
+                max_grad_idx = start_idx + max_grad_offset
+            elif peak_idx == start_idx + 1:
+                # Only 2 points, max gradient is at start
+                max_grad_idx = start_idx
+            else:
+                # Single point, use start
+                max_grad_idx = start_idx
 
             events.append({
                 'start': times[start_idx],
+                'start_idx': start_idx,
+                'end': times[end_idx],
+                'end_idx': end_idx,
                 'peak': times[peak_idx],
-                'peak_speed': df.loc[times[peak_idx], speed_col]
+                'peak_speed': V[peak_idx],
+                'max_gradient_time': times[max_grad_idx]
             })
 
             # skip ahead to avoid detecting same event twice
-            i = peak_idx + 1
+            i = end_idx + 1
         else:
             i += 1
 
     if not events:
         return []
 
-    events = sorted(events, key=lambda e: e['peak'])
-    thinned = [events[0]]
-    last_peak = events[0]['peak']
-
+    # Combine events where start of event A is within min_separation_hours of END of event B
+    # Recalculate max gradient time across the entire combined interval
+    events = sorted(events, key=lambda e: e['start'])
+    merged = [events[0]]
+    
     for ev in events[1:]:
-        dt_peak = abs((ev['peak'] - last_peak).total_seconds()) / 3600.0
-        if dt_peak >= min_separation_hours:
-            thinned.append(ev)
-            last_peak = ev['peak']
+        last_event = merged[-1]
+        # Check separation: time from END of last event to START of current event
+        dt_sep = (ev['start'] - last_event['end']).total_seconds() / 3600.0
+        
+        if dt_sep >= min_separation_hours:
+            # Events are sufficiently separated, keep as distinct event
+            merged.append(ev)
+        else:
+            # Events are too close, merge them
+            # Combine the intervals and recalculate max gradient time
+            
+            # Find indices for the combined interval (start of last event to end of current event)
+            combined_start_idx = last_event['start_idx']
+            combined_end_idx = ev['end_idx']
+            
+            # Recalculate max gradient over entire combined interval
+            combined_V = V[combined_start_idx:combined_end_idx + 1]
+            if len(combined_V) > 1:
+                combined_gradients = np.diff(combined_V) / dt
+                max_grad_offset = np.argmax(combined_gradients)
+                combined_max_grad_idx = combined_start_idx + max_grad_offset
+            else:
+                combined_max_grad_idx = combined_start_idx
+            
+            # Find peak in combined interval
+            combined_peak_idx = combined_start_idx + np.argmax(combined_V)
+            
+            # Update the last merged event with combined properties
+            merged[-1] = {
+                'start': last_event['start'],           # Keep start of first event
+                'start_idx': combined_start_idx,
+                'end': ev['end'],                       # Use end of later event
+                'end_idx': combined_end_idx,
+                'peak': times[combined_peak_idx],       # Peak in combined interval
+                'peak_speed': V[combined_peak_idx],
+                'max_gradient_time': times[combined_max_grad_idx]  # Recalculated max gradient
+            }
 
-    return thinned
+    return merged
 
 
 
-def match_events(eventsA, eventsB, delta_t_max=48):
+def match_events(eventsA, eventsB, delta_t_max=72):
     """
     Match event lists using Owens (2005) method.
 
     Parameters
     ----------
-    eventsA, eventsB : lists of event dicts ({start, peak, peak_speed})
+    eventsA, eventsB : lists of event dicts ({start, peak, peak_speed, max_gradient_time})
     dt_max_hours : maximum allowed timing difference
     v_scale : normalisation for speed differences
 
@@ -140,9 +202,9 @@ def match_events(eventsA, eventsB, delta_t_max=48):
 
             # -----------------------
             # STRICT OWENS FILTER:
-            # Reject if peak times >48h apart
+            # Reject if max_gradient_time >delta_t_max hours apart
             # -----------------------
-            dt = abs((Bj['start'] - Ai['start']).total_seconds()) / 3600.0
+            dt = abs((Bj['max_gradient_time'] - Ai['max_gradient_time']).total_seconds()) / 3600.0
             if dt > delta_t_max:
                 continue  # skip – not a valid candidate
 
@@ -180,9 +242,10 @@ def compute_timing_errors(matches, use='peak'):
     ----------
     matches : list of (A_event, B_event)
         Output from match_events_owens
-    use : 'peak' or 'start'
+    use : 'peak' or 'start' or 'max_gradient'
         - 'peak'  → timing error = B.peak - A.peak  (Owens definition)
         - 'start' → timing error = B.start - A.start (arrival time)
+        - 'max_gradient' → timing error = B.max_gradient_time - A.max_gradient_time
 
     Returns
     -------
@@ -195,8 +258,10 @@ def compute_timing_errors(matches, use='peak'):
             dt = (B['peak'] - A['peak']).total_seconds() / 3600.0
         elif use == 'start':
             dt = (B['start'] - A['start']).total_seconds() / 3600.0
+        elif use == 'max_gradient':
+            dt = (B['max_gradient_time'] - A['max_gradient_time']).total_seconds() / 3600.0
         else:
-            raise ValueError("use must be 'peak' or 'start'")
+            raise ValueError("use must be 'peak', 'start', or 'max_gradient'")
         errors.append(dt)
 
     return errors
@@ -230,6 +295,7 @@ def peak_speed_errors(matches):
     -------
     speed_errors : list of floats
         Difference: model_peak - observed_peak (km/s)
+        Positive error means model overestimates the peak speed.
     summary : dict
         Summary statistics: mean error, mean absolute error, std, number of events
     """
@@ -242,6 +308,7 @@ def peak_speed_errors(matches):
         else:
             obs, mod = match
 
+        # Error = model - obs (positive means model overestimates)
         speed_errors.append(mod['peak_speed'] - obs['peak_speed'])
 
     summary = {

@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "C:\Users\mathe\Dropbox\python_repos\HUXt_insitu\code\insitu_huxt_forecasts_analysis.py", line 32, in <module>
+    import huxt_inputs as Hin
+  File "C:\Users\mathe\Dropbox\python_repos\HUXt_insitu\code\huxt_inputs.py", line 12, in <module>
+    import httplib2
+ModuleNotFoundError: No module named 'httplib2'

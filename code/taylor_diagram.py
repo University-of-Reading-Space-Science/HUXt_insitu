@@ -14,12 +14,67 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.lines import Line2D
 
+def compute_taylor_target_stats(obs, pred):
+    """
+    Compute Taylor and Target diagram statistics for a single prediction.
+    
+    Parameters:
+    -----------
+    obs : array-like
+        Observations (1D array)
+    pred : array-like
+        Predictions (1D array, same shape as obs)
+    
+    Returns:
+    --------
+    stats : dict
+        Dictionary containing:
+        - 'std': Standard deviation of predictions
+        - 'corr': Correlation coefficient between obs and pred
+        - 'crmse': Centered root-mean-square error
+        - 'bias': Mean bias (pred - obs)
+        - 'ubrmse': Unbiased root-mean-square error
+    
+    Examples:
+    ---------
+    >>> obs = np.random.normal(400, 100, 1000)
+    >>> pred = obs + np.random.normal(10, 30, 1000)
+    >>> stats = compute_taylor_target_stats(obs, pred)
+    >>> print(f"Bias: {stats['bias']:.1f}, ubRMSE: {stats['ubrmse']:.1f}")
+    """
+    # Ensure inputs are numpy arrays
+    obs = np.asarray(obs)
+    pred = np.asarray(pred)
+    
+    # Calculate basic statistics
+    obs_std = np.std(obs, ddof=1)
+    obs_mean = np.mean(obs)
+    pred_std = np.std(pred, ddof=1)
+    pred_mean = np.mean(pred)
+    
+    # Taylor diagram statistics
+    corr = np.corrcoef(obs - obs_mean, pred - pred_mean)[0, 1]
+    crmse = np.sqrt(obs_std**2 + pred_std**2 - 2*obs_std*pred_std*corr)
+    
+    # Target diagram statistics
+    bias = np.mean(pred - obs)
+    ubrmse = np.sqrt(np.mean((pred - obs - bias)**2))
+    
+    return {
+        'std': pred_std,
+        'corr': corr,
+        'crmse': crmse,
+        'bias': bias,
+        'ubrmse': ubrmse,
+    }
+
 def combined_taylor_target_diagram(obs, predictions, labels, colors=None, markers=None,
-                                   figsize=(16, 7), dpi=150, figname=None, normalize=False, units=''):
+                                   figsize=(16, 7), dpi=150, figname=None, normalize=False, units='',
+                                   std_ranges=None, obs_std_range=None):
     """
     Wrapper function that computes statistics and creates a combined Taylor and Target diagram.
     
-    This function computes RMSD, correlation, bias, and other statistics from observations
+    This function computes RMSE, correlation, bias, and other statistics from observations
     and predictions, then calls plot_taylor_target_diagram() to visualize them.
     
     Parameters:
@@ -44,6 +99,12 @@ def combined_taylor_target_diagram(obs, predictions, labels, colors=None, marker
         If True, normalize by observation std dev. Default: False
     units : str, optional
         Unit string for axis labels (e.g., '[km/s]'). Default: ''
+    std_ranges : list of tuple, optional
+        List of (min_std, max_std) tuples for each model, to show as shaded regions on Taylor diagram.
+        If provided, should have same length as predictions. Default: None
+    obs_std_range : tuple, optional
+        (min_obs_std, max_obs_std) tuple for observations, to show as shaded region on Taylor diagram.
+        Default: None
     
     Returns:
     --------
@@ -69,39 +130,20 @@ def combined_taylor_target_diagram(obs, predictions, labels, colors=None, marker
     obs = np.asarray(obs)
     predictions = [np.asarray(p) for p in predictions]
     
-    # Calculate statistics from observations and predictions
-    obs_std = np.std(obs, ddof=1)
-    obs_mean = np.mean(obs)
+    # Calculate statistics from observations and predictions using the standalone function
+    stats = [compute_taylor_target_stats(obs, pred) for pred in predictions]
     
-    stats = []
-    for pred in predictions:
-        pred_std = np.std(pred, ddof=1)
-        pred_mean = np.mean(pred)
-        
-        # Taylor diagram statistics
-        corr = np.corrcoef(obs - obs_mean, pred - pred_mean)[0, 1]
-        crmsd = np.sqrt(obs_std**2 + pred_std**2 - 2*obs_std*pred_std*corr)
-        
-        # Target diagram statistics
-        bias = np.mean(pred - obs)
-        ubrmsd = np.sqrt(np.mean((pred - obs - bias)**2))
-        
-        stats.append({
-            'std': pred_std,
-            'corr': corr,
-            'crmsd': crmsd,
-            'bias': bias,
-            'ubrmsd': ubrmsd,
-        })
+    # Get observation std for reference
+    obs_std = np.std(obs, ddof=1)
     
     # Normalize if requested
     if normalize:
         obs_std_for_plot = 1.0  # Normalized reference
         for s in stats:
             s['std'] /= obs_std
-            s['crmsd'] /= obs_std
+            s['crmse'] /= obs_std
             s['bias'] /= obs_std
-            s['ubrmsd'] /= obs_std
+            s['ubrmse'] /= obs_std
     else:
         obs_std_for_plot = obs_std  # Use actual observation std
     
@@ -109,17 +151,19 @@ def combined_taylor_target_diagram(obs, predictions, labels, colors=None, marker
     return plot_taylor_target_diagram(stats, labels, obs_std=obs_std_for_plot,
                                      colors=colors, markers=markers,
                                      figsize=figsize, dpi=dpi, figname=figname,
-                                     normalize=normalize, units=units)
+                                     normalize=normalize, units=units, std_ranges=std_ranges,
+                                     obs_std_range=obs_std_range)
 
 
 def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, markers=None,
-                               figsize=(16, 7), dpi=150, figname=None, normalize=False, units=''):
+                               figsize=(16, 7), dpi=150, figname=None, normalize=False, units='',
+                               std_ranges=None, obs_std_range=None):
     """
     Plot a combined Taylor and Target diagram from pre-computed statistics.
     
     This is the core plotting function that creates two panels: a Taylor diagram (left) 
     showing correlation and standard deviation statistics, and a Target diagram (right) 
-    showing bias and unbiased RMSD statistics.
+    showing bias and unbiased RMSE statistics.
     
     Parameters:
     -----------
@@ -127,9 +171,9 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
         List of dictionaries, one per model/prediction. Each dict must contain:
         - 'std': Standard deviation (float)
         - 'corr': Correlation coefficient (float, 0-1)
-        - 'crmsd': Centered RMSD (float)
+        - 'crmse': Centered RMSE (float)
         - 'bias': Bias (float)
-        - 'ubrmsd': Unbiased RMSD (float)
+        - 'ubrmse': Unbiased RMSE (float)
     labels : list of str
         Labels for each statistic set (e.g., ['Model 1', 'Model 2'])
     obs_std : float, optional
@@ -149,6 +193,12 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
         If True, values are assumed to be normalized. Default: False
     units : str, optional
         Unit string for axis labels (e.g., '[km/s]'). Default: ''
+    std_ranges : list of tuple, optional
+        List of (min_std, max_std) tuples for each model, to show as shaded regions on Taylor diagram.
+        If provided, should have same length as stats_list. Default: None
+    obs_std_range : tuple, optional
+        (min_obs_std, max_obs_std) tuple for observations, to show as shaded region on Taylor diagram.
+        Default: None
     
     Returns:
     --------
@@ -160,8 +210,8 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
     Examples:
     ---------
     >>> stats = [
-    ...     {'std': 80, 'corr': 0.95, 'crmsd': 20, 'bias': 5, 'ubrmsd': 15},
-    ...     {'std': 70, 'corr': 0.85, 'crmsd': 40, 'bias': 20, 'ubrmsd': 35}
+    ...     {'std': 80, 'corr': 0.95, 'crmse': 20, 'bias': 5, 'ubrmse': 15},
+    ...     {'std': 70, 'corr': 0.85, 'crmse': 40, 'bias': 20, 'ubrmse': 35}
     ... ]
     >>> fig, (ax_t, ax_tg) = plot_taylor_target_diagram(
     ...     stats, ['Model 1', 'Model 2'],
@@ -188,7 +238,7 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
     def _create_taylor(fig, subfig, stats, labels, colors, markers, obs_std, normalize, units):
         """Create Taylor diagram in subfigure"""
         
-        max_std = max([s['std'] for s in stats]) * 1.2
+        max_std = max([s['std'] for s in stats]) * 1.5
         
         # Calculate standard deviation contour levels
         if normalize:
@@ -275,22 +325,22 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
             r_std = std_val * np.ones_like(theta_std)
             ax.plot(theta_std, r_std, color='grey', linewidth=1.0, alpha=0.5, zorder=1, linestyle='--')
         
-        # Add RMSD contours
+        # Add RMSE contours
         if normalize:
-            rmsd_levels = np.array([0.5, 1.0, 1.5])
+            rmse_levels = np.array([0.5, 1.0, 1.5])
         else:
-            max_rmsd = max_std * 1.3
+            max_rmse = max_std * 1.3
             n_contours = 3
-            rmsd_spacing = max_rmsd / (n_contours + 1)
-            rmsd_levels = np.arange(rmsd_spacing, max_rmsd, rmsd_spacing)
-            if rmsd_spacing > 20:
-                rmsd_spacing_rounded = np.round(rmsd_spacing / 20) * 20
-                rmsd_levels = np.arange(rmsd_spacing_rounded, max_rmsd, rmsd_spacing_rounded)
+            rmse_spacing = max_rmse / (n_contours + 1)
+            rmse_levels = np.arange(rmse_spacing, max_rmse, rmse_spacing)
+            if rmse_spacing > 20:
+                rmse_spacing_rounded = np.round(rmse_spacing / 20) * 20
+                rmse_levels = np.arange(rmse_spacing_rounded, max_rmse, rmse_spacing_rounded)
         
-        for i, rmsd in enumerate(rmsd_levels):
+        for i, rmse in enumerate(rmse_levels):
             angles = np.linspace(0, np.pi, 200)
-            x_cart = obs_std + rmsd * np.cos(angles)
-            y_cart = rmsd * np.sin(angles)
+            x_cart = obs_std + rmse * np.cos(angles)
+            y_cart = rmse * np.sin(angles)
             r_polar = np.sqrt(x_cart**2 + y_cart**2)
             theta_polar = np.arctan2(y_cart, x_cart)
             mask = (theta_polar >= 0) & (theta_polar <= np.pi/2) & (r_polar <= max_std_plot)
@@ -307,13 +357,37 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
                     
                     if r_label <= max_std_plot * 0.98:
                         if i == 0:
-                            label_text = f'RMSD = {rmsd:.0f}' if not normalize else f'RMSD = {rmsd:.2f}'
+                            label_text = f'uRMSE = {rmse:.0f}' if not normalize else f'uRMSE = {rmse:.2f}'
                         else:
-                            label_text = f'{rmsd:.0f}' if not normalize else f'{rmsd:.2f}'
+                            label_text = f'{rmse:.0f}' if not normalize else f'{rmse:.2f}'
                         ax.text(theta_label, r_label, label_text, 
                                fontsize=12, color='black', ha='center', va='center',
                                bbox=dict(boxstyle='round,pad=0.4', facecolor='white', 
                                         edgecolor='none', alpha=0.9), zorder=4)
+        
+        # Add shaded region for observation std range if provided
+        if obs_std_range is not None:
+            from matplotlib.patches import Polygon
+            theta_fill = np.linspace(0, np.pi/2, 100)
+            
+            min_obs_std, max_obs_std = obs_std_range
+            
+            # Create polygon for the annulus (ring) between min and max obs std
+            # Outer arc
+            r_outer = max_obs_std * np.ones_like(theta_fill)
+            x_outer = r_outer * np.sin(theta_fill)
+            y_outer = r_outer * np.cos(theta_fill)
+            
+            # Inner arc
+            r_inner = min_obs_std * np.ones_like(theta_fill)
+            x_inner = r_inner * np.sin(theta_fill)
+            y_inner = r_inner * np.cos(theta_fill)
+            
+            # Combine to create closed polygon
+            verts = list(zip(theta_fill, r_outer)) + list(zip(theta_fill[::-1], r_inner[::-1]))
+            poly = Polygon(verts, closed=True, facecolor='black', alpha=0.08, 
+                         edgecolor='none', zorder=1)
+            ax.add_patch(poly)
         
         # Add reference std arc
         t = np.linspace(0, np.pi/2, 100)
@@ -343,7 +417,9 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
                    markersize=12, label=label, zorder=10, 
                    markeredgecolor='white', markeredgewidth=1.5)
         
-        ax.set_title('Taylor Diagram', pad=20, fontsize=17, fontweight='bold')
+        # Add (a) label at top left
+        ax.text(0.02, 0.98, '(a)', transform=ax.transAxes, fontsize=16, fontweight='bold', 
+                va='top', ha='left')
         
         return ax
     
@@ -363,7 +439,7 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
             colors = colormaps['tab10'](np.linspace(0, 1, len(stats)))
         
         for i, s in enumerate(stats):
-            ax.plot(s['bias'], s['ubrmsd'], 'o', color=colors[i], 
+            ax.plot(s['bias'], s['ubrmse'], 'o', color=colors[i], 
                     markersize=12, label=labels[i], zorder=10,
                     markeredgecolor='white', markeredgewidth=1.5)
         
@@ -372,47 +448,43 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
         
         # Calculate axis limits intelligently
         max_bias = max(np.abs([s['bias'] for s in stats]))
-        max_ubrmsd = max([s['ubrmsd'] for s in stats])
+        max_ubrmse = max([s['ubrmse'] for s in stats])
+        min_bias = min([s['bias'] for s in stats])
         
-        # Round x-axis max up to sensible value - tighter rounding
-        x_max_raw = max_bias * 1.05
-        magnitude = 10 ** np.floor(np.log10(x_max_raw))
-        normalized = x_max_raw / magnitude
-        if normalized < 1.3:
-            x_max = 1.5 * magnitude
-        elif normalized < 2:
-            x_max = 2 * magnitude
-        elif normalized < 3:
-            x_max = 3 * magnitude
-        elif normalized < 5:
-            x_max = 5 * magnitude
-        else:
-            x_max = 10 * magnitude
+        # Start with a conservative margin around data
+        x_margin = max(np.abs(max_bias), np.abs(min_bias)) * 0.15
+        y_margin = max_ubrmse * 0.15
         
-        # Y-axis should be roughly 2x the x-axis limit (accounting for small negative offset)
-        # With slight negative for star visibility: from -0.1*x_max to 2*x_max
-        y_min = -0.1 * x_max
-        y_max = 2.0 * x_max
+        # Initial axis limits with margins
+        x_max = max(np.abs(max_bias), np.abs(min_bias)) + x_margin
+        y_max = max_ubrmse + y_margin
         
-        # Check if max data point fits; if not, expand x_max
-        max_data_rmsd = max([np.sqrt(s['bias']**2 + s['ubrmsd']**2) for s in stats])
-        while max_data_rmsd > np.sqrt(x_max**2 + y_max**2) or max_ubrmsd > y_max:
+        # For square aspect ratio, the height must equal width
+        # Width = 2 * x_max, Height = y_max - y_min
+        # So we need: y_max - y_min = 2 * x_max
+        # Set y_min to maintain space for origin visibility
+        y_min = -x_max  # This gives height = 2*x_max, matching width of 2*x_max
+        
+        # Ensure all points are comfortably within limits with additional safety margin
+        safety_margin = 1.15
+        while (max_bias > x_max / safety_margin or min_bias < -x_max / safety_margin or 
+               max_ubrmse > y_max / safety_margin):
             x_max *= 1.2
-            y_max = 2.0 * x_max
-            y_min = -0.1 * x_max
+            y_max = x_max  # Maintain square aspect
+            y_min = -x_max
         
         # Set plot limits
         ax.set_xlim(-x_max, x_max)
         ax.set_ylim(y_min, y_max)
         ax.set_aspect('equal', adjustable='box')
         
-        # Add RMSD circles based on actual plot boundary
+        # Add RMSE circles based on actual plot boundary
         # Circles should extend to the farthest boundary: x-axis, y-axis, or diagonal corner
-        max_rmsd_plot = max(x_max, y_max, np.sqrt(x_max**2 + y_max**2))
+        max_rmse_plot = max(x_max, y_max, np.sqrt(x_max**2 + y_max**2))
         
         # We want approximately 4-5 circles based on the plot boundary
         target_circles = 4.5
-        raw_spacing = max_rmsd_plot / target_circles
+        raw_spacing = max_rmse_plot / target_circles
         
         # Round to nice number using base-10 scaling
         # Get order of magnitude
@@ -431,40 +503,45 @@ def plot_taylor_target_diagram(stats_list, labels, obs_std=None, colors=None, ma
             circle_spacing = 1
         
         # Generate circles from spacing up to plot boundary
-        rmsd_circles = []
-        rmsd = circle_spacing
-        while rmsd <= max_rmsd_plot:
-            rmsd_circles.append(rmsd)
-            rmsd += circle_spacing
+        rmse_circles = []
+        rmse = circle_spacing
+        while rmse <= max_rmse_plot:
+            rmse_circles.append(rmse)
+            rmse += circle_spacing
         
         # Calculate the angle to the plot corner (top-right) for label placement
         corner_angle = np.arctan2(y_max, x_max)
         label_cos = np.cos(corner_angle)
         label_sin = np.sin(corner_angle)
         
-        for rmsd_circle in rmsd_circles:
-            circle = Circle((0, 0), rmsd_circle, fill=False, edgecolor='grey', 
+        for rmse_circle in rmse_circles:
+            circle = Circle((0, 0), rmse_circle, fill=False, edgecolor='grey', 
                            linestyle='--', linewidth=1, alpha=0.4)
             ax.add_patch(circle)
             
             # Place label along the angle to the plot corner
-            # Label is positioned at (rmsd_circle * cos(angle), rmsd_circle * sin(angle))
-            label_x = rmsd_circle * label_cos
-            label_y = rmsd_circle * label_sin
+            # Label is positioned at (rmse_circle * cos(angle), rmse_circle * sin(angle))
+            label_x = rmse_circle * label_cos
+            label_y = rmse_circle * label_sin
             
             # Only label if it fits completely within the plot area
             # Check if label position is within plot boundaries
             if label_x <= x_max and label_y <= y_max:
                 # Format label nicely
                 if circle_spacing >= 1:
-                    label_str = f'{rmsd_circle:.0f}'
+                    label_str = f'{rmse_circle:.0f}'
                 else:
-                    label_str = f'{rmsd_circle:.1f}'
+                    label_str = f'{rmse_circle:.1f}'
+                # Add "RMSE = " prefix to the first contour
+                if rmse_circle == rmse_circles[0]:
+                    label_str = f'RMSE = {label_str}'
                 ax.text(label_x, label_y, label_str, 
                         fontsize=12, color='black', alpha=0.8, ha='center', va='center')
         
         ax.set_xlabel('Bias' + (' (normalized)' if normalize else f' {units}'), fontsize=16)
-        ax.set_ylabel('Unbiased RMSD' + (' (normalized)' if normalize else f' {units}'), fontsize=16)
+        ax.set_ylabel('Unbiased RMSE' + (' (normalized)' if normalize else f' {units}'), fontsize=16)
+        ax.text(0.02, 0.98, '(b)', transform=ax.transAxes, fontsize=16, fontweight='bold', 
+                va='top', ha='left')
         ax.grid(True, alpha=0.3)
         ax.tick_params(labelsize=14)
         
