@@ -420,4 +420,3 @@ dependencies:
   - zlib-ng=2.2.5=h1608b31_0
   - zstandard=0.23.0=py39ha55e580_2
   - zstd=1.5.7=hbeecb71_2
-prefix: C:\Users\mathe\miniforge3\envs\torch

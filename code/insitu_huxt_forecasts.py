@@ -62,7 +62,8 @@ plot_lead_time = 3
 cwd = os.path.dirname(os.path.realpath(__file__))
 data_dir = os.path.join(os.path.dirname(cwd), 'data')
 icmelist_path = os.path.join(data_dir, 'Richardson_Cane_Porcessed_ICME_list.csv')
-output_dir = os.path.join(os.getenv('DBOX'), 'InSitu_HUXt')
+output_dir = os.getenv('HUXT_INSITU_RAW_DIR',
+                       os.path.join(data_dir, 'raw', 'insitu_huxt'))
 
 
 

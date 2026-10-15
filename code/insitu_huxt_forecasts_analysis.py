@@ -108,15 +108,17 @@ color_obs = 'k'           # Black for observations
 
 
 
-#directory structure
+# Directory structure.  Environment overrides make the expensive raw-forecast
+# rebuild possible without baking an author's filesystem layout into the code.
 cwd = os.path.dirname(os.path.realpath(__file__))
-#figdir =  os.path.join(os.path.dirname(cwd), 'figures' )
-figdir = os.path.join(os.getenv('DBOX'), 'Apps','Overleaf','InSitu-HUXt_forecast' )
-datadir = os.path.join(os.path.dirname(cwd), 'data')
+repo_root = os.path.dirname(cwd)
+figdir = os.getenv('HUXT_FIGURE_DIR', os.path.join(repo_root, 'figures'))
+datadir = os.getenv('HUXT_DATA_DIR', os.path.join(repo_root, 'data'))
 icmelist_path = os.path.join(datadir, 'Richardson_Cane_Porcessed_ICME_list.csv')
-ishuxt_dir = os.path.join(os.getenv('DBOX'), 'Data', 'InSitu_HUXt')
-wsahuxt_dir = os.path.join(os.getenv('DBOX'), 'Data', 'WSA', 'WSA_CCMC', 
-                           'CCMC_WSA_HUXt')
+ishuxt_dir = os.getenv('HUXT_INSITU_RAW_DIR', os.path.join(datadir, 'raw', 'insitu_huxt'))
+wsahuxt_dir = os.getenv('HUXT_WSA_RAW_DIR', os.path.join(datadir, 'raw', 'wsa_huxt'))
+omni_cache = os.getenv('HUXT_OMNI_CACHE', os.path.join(datadir, 'omni_1hour_2007_2023.csv'))
+os.makedirs(figdir, exist_ok=True)
 
 
 
@@ -126,7 +128,14 @@ wsahuxt_dir = os.path.join(os.getenv('DBOX'), 'Data', 'WSA', 'WSA_CCMC',
 dl_starttime = start_time - datetime.timedelta(days=28)
 dl_endtime = stop_time + datetime.timedelta(days=28)
 
-omni = Hin.get_omni(dl_starttime, dl_endtime)
+if os.path.exists(omni_cache):
+    print(f"Loading cached OMNI data from {omni_cache}")
+    omni = pd.read_csv(omni_cache, parse_dates=['datetime'])
+else:
+    print("OMNI cache not found; downloading from NASA CDAWeb via SunPy...")
+    omni = Hin.get_omni(dl_starttime, dl_endtime)
+    omni.to_csv(omni_cache, index=False)
+    print(f"Cached OMNI data at {omni_cache}")
 
 
 
